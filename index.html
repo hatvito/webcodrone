@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CoDrone EDU 網頁端 3D 數位雙胞胎控制台</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans h-screen flex flex-col overflow-hidden">
+
+    <!-- 頂部導覽列 -->
+    <header class="bg-slate-800 border-b border-slate-700 px-6 py-4 flex justify-between items-center shadow-md z-10">
+        <div class="flex items-center space-x-3">
+            <div class="w-3 h-3 bg-red-500 rounded-full animate-pulse" id="connection-indicator"></div>
+            <h1 class="text-xl font-bold tracking-wide">CoDrone EDU <span class="text-indigo-400 font-light">Digital Twin</span></h1>
+        </div>
+        <div class="flex items-center space-x-4">
+            <span id="status-text" class="text-sm text-slate-400">尚未連線</span>
+            <button id="connect-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg font-medium transition shadow-lg flex items-center space-x-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                <span>連接序列埠 (USB)</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- 主要內容區 -->
+    <div class="flex-1 flex overflow-hidden">
+        
+        <!-- 左側：3D 數位雙胞胎視窗 -->
+        <div class="flex-1 relative bg-slate-950 flex flex-col">
+            <div id="canvas-container" class="flex-1 w-full h-full"></div>
+            <div class="absolute bottom-4 left-4 bg-slate-900/80 backdrop-blur border border-slate-700/50 p-3 rounded-lg text-xs space-y-1 text-slate-300 pointer-events-none">
+                <p class="font-semibold text-indigo-400">3D 視角說明：</p>
+                <p>• 藍色機身即時同步實體無人機之 Roll / Pitch / Yaw 姿態</p>
+                <p>• 前方紅色箭頭代表機頭方向 (Front)</p>
+            </div>
+        </div>
+
+        <!-- 右側：即時感測器數據面板 -->
+        <div class="w-96 bg-slate-800 border-l border-slate-700 flex flex-col p-6 space-y-6 overflow-y-auto shadow-2xl">
+            <div>
+                <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">IMU 姿態數據 (RawMotion)</h2>
+                <div class="grid grid-cols-3 gap-3">
+                    <div class="bg-slate-900 p-3 rounded-lg border border-slate-700/50 text-center">
+                        <span class="text-xs text-slate-500 block">Roll (滾轉)</span>
+                        <span id="val-roll" class="text-lg font-mono font-bold text-indigo-400">0.0°</span>
+                    </div>
+                    <div class="bg-slate-900 p-3 rounded-lg border border-slate-700/50 text-center">
+                        <span class="text-xs text-slate-500 block">Pitch (俯仰)</span>
+                        <span id="val-pitch" class="text-lg font-mono font-bold text-indigo-400">0.0°</span>
+                    </div>
+                    <div class="bg-slate-900 p-3 rounded-lg border border-slate-700/50 text-center">
+                        <span class="text-xs text-slate-500 block">Yaw (偏航)</span>
+                        <span id="val-yaw" class="text-lg font-mono font-bold text-indigo-400">0.0°</span>
+                    </div>
+                </div>
+            </div>
+
+            <div>
+                <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">測距雷達 (ToF / Front)</h2>
+                <div class="bg-slate-900 p-4 rounded-lg border border-slate-700/50 flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                        </div>
+                        <div>
+                            <span class="text-xs text-slate-400 block">前方障礙物距離</span>
+                            <span id="val-front-range" class="text-xl font-mono font-bold text-emerald-400">--- mm</span>
+                        </div>
+                    </div>
+                    <div id="range-warning" class="w-3 h-3 rounded-full bg-slate-700"></div>
+                </div>
+            </div>
+
+            <div>
+                <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">系統控制快捷</h2>
+                <div class="space-y-3">
+                    <button id="btn-takeoff" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-lg font-medium transition shadow-md flex items-center justify-center space-x-2">
+                        <span>起飛 (Takeoff)</span>
+                    </button>
+                    <button id="btn-land" class="w-full bg-amber-600 hover:bg-amber-500 text-white py-2.5 rounded-lg font-medium transition shadow-md flex items-center justify-center space-x-2">
+                        <span>降落 (Land)</span>
+                    </button>
+                    <button id="btn-stop" class="w-full bg-rose-600 hover:bg-rose-500 text-white py-2.5 rounded-lg font-medium transition shadow-md flex items-center justify-center space-x-2">
+                        <span>緊急停止 (Emergency Stop)</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="mt-auto bg-slate-900/50 p-4 rounded-lg border border-slate-700/30 text-xs text-slate-400 space-y-1">
+                <p class="font-semibold text-slate-300">💡 提示：</p>
+                <p>請使用支援 Web Serial API 的瀏覽器（如 Chrome / Edge），並將遙控器透過 USB 連接電腦。</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 前端互動與 Web Serial 邏輯 -->
+    <script>
+        // --- 1. Three.js 3D 場景初始化 ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x030712);
+
+        const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(0, 3, 5);
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        container.appendChild(renderer.domElement);
+
+        // 燈光
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(5, 10, 7);
+        scene.add(directionalLight);
+
+        // 網格地板
+        const gridHelper = new THREE.GridHelper(10, 10, 0x4f46e5, 0x1e293b);
+        gridHelper.position.y = -1;
+        scene.add(gridHelper);
+
+        // 建立簡單的 3D 無人機模型群組
+        const droneGroup = new THREE.Group();
+
+        // 機身
+        const bodyGeo = new THREE.BoxGeometry(0.8, 0.2, 0.8);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0x4f46e5, roughness: 0.3 });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        droneGroup.add(body);
+
+        // 機頭指示箭頭 (紅色)
+        const noseGeo = new THREE.ConeGeometry(0.15, 0.4, 4);
+        const noseMat = new THREE.MeshStandardMaterial({ color: 0xef4444 });
+        const nose = new THREE.Mesh(noseGeo, noseMat);
+        nose.rotation.x = Math.PI / 2;
+        nose.position.set(0, 0, -0.5);
+        droneGroup.add(nose);
+
+        scene.add(droneGroup);
+
+        // 視窗縮放自適應
+        window.addEventListener('resize', () => {
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+
+        // 渲染循環
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        animate();
+
+
+        // --- 2. Web Serial API 與序列埠通訊邏輯 ---
+        let port;
+        let reader;
+        let inputStream;
+
+        const connectBtn = document.getElementById('connect-btn');
+        const statusText = document.getElementById('status-text');
+        const connectionIndicator = document.getElementById('connection-indicator');
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                // 要求選擇序列埠 (Baud rate 通常為 115200)
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+
+                statusText.textContent = "已連線";
+                statusText.className = "text-sm text-emerald-400 font-medium";
+                connectionIndicator.className = "w-3 h-3 bg-emerald-500 rounded-full shadow-[0_0_10px_#10b981]";
+                connectBtn.textContent = "已連線";
+                connectBtn.disabled = true;
+                connectBtn.className = "bg-slate-700 text-slate-400 px-5 py-2 rounded-lg font-medium cursor-not-allowed";
+
+                readSerialData();
+            } catch (error) {
+                console.error("序列埠連線失敗:", error);
+                alert("無法連接序列埠，請確認是否為 Chrome/Edge 瀏覽器並授權 USB 裝置。");
+            }
+        });
+
+        // 讀取序列埠數據串流
+        async function readSerialData() {
+            const textDecoder = new TextDecoderStream();
+            inputStream = port.readable.pipeTo(textDecoder.writable);
+            reader = textDecoder.readable.getReader();
+
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    // 這裡可以處理收到的原始二進位或文字封包
+                    // 模擬姿態更新（實際專案中會解析對應的 DataType.RawMotion 封包）
+                }
+            } catch (error) {
+                console.error("讀取錯誤:", error);
+            } finally {
+                reader.releaseLock();
+            }
+        }
+
+        // 模擬即時更新 3D 模型與 UI 數據的測試函數（你可以接入真實解析後的數值）
+        function updateTelemetry(roll, pitch, yaw, frontRange) {
+            // 更新 3D 無人機旋轉 (將角度轉為弳度)
+            droneGroup.rotation.z = -THREE.MathUtils.degToRad(roll);
+            droneGroup.rotation.x = THREE.MathUtils.degToRad(pitch);
+            droneGroup.rotation.y = THREE.MathUtils.degToRad(yaw);
+
+            // 更新 UI 數據顯示
+            document.getElementById('val-roll').textContent = roll.toFixed(1) + '°';
+            document.getElementById('val-pitch').textContent = pitch.toFixed(1) + '°';
+            document.getElementById('val-yaw').textContent = yaw.toFixed(1) + '°';
+            document.getElementById('val-front-range').textContent = frontRange + ' mm';
+
+            const warningDot = document.getElementById('range-warning');
+            if (frontRange < 300) {
+                warningDot.className = "w-3 h-3 rounded-full bg-rose-500 animate-ping";
+            } else if (frontRange < 600) {
+                warningDot.className = "w-3 h-3 rounded-full bg-amber-500";
+            } else {
+                warningDot.className = "w-3 h-3 rounded-full bg-emerald-500";
+            }
+        }
+
+        // 開發測試用：模擬無人機在空中晃動與偵測距離
+        let t = 0;
+        setInterval(() => {
+            t += 0.05;
+            let mockRoll = Math.sin(t) * 10;
+            let mockPitch = Math.cos(t * 0.8) * 8;
+            let mockYaw = (t * 10) % 360;
+            let mockRange = Math.floor(500 + Math.sin(t * 2) * 400);
+            updateTelemetry(mockRoll, mockPitch, mockYaw, mockRange);
+        }, 50);
+
+        // --- 3. 控制按鈕事件綁定 ---
+        document.getElementById('btn-takeoff').addEventListener('click', () => {
+            console.log("發送起飛指令...");
+            // 這裡可以透過 port.writable 寫入起飛的二進位封包
+        });
+        document.getElementById('btn-land').addEventListener('click', () => {
+            console.log("發送降落指令...");
+        });
+        document.getElementById('btn-stop').addEventListener('click', () => {
+            console.log("發送緊急停止指令...");
+        });
+    </script>
+</body>
+</html>
