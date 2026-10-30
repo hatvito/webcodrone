@@ -30,6 +30,7 @@ const parser = new DroneProtocolParser((type, data) => {
 connectBtn.addEventListener('click', async () => {
     try {
         port = await navigator.serial.requestPort();
+        // 確保鮑率與 CoDrone EDU 遙控器一致 (115200)
         await port.open({ baudRate: 115200 });
 
         statusText.textContent = "已連線";
@@ -46,22 +47,29 @@ connectBtn.addEventListener('click', async () => {
     }
 });
 
+// 直接讀取二進位串流 (Uint8Array)，不經過文字解碼破壞原始位元組
 async function readSerial() {
-    const decoder = new TextDecoderStream();
-    port.readable.pipeTo(decoder.writable);
-    reader = decoder.readable.getReader();
-
     try {
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            // 轉換字串或位元組並送入解析器
-            const uint8Array = new TextEncoder().encode(value);
-            parser.feedData(uint8Array);
+        while (port.readable) {
+            reader = port.readable.getReader();
+            try {
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    
+                    // value 是一個 Uint8Array，可打開 F12 主控台檢查收到的原始位元組
+                    // console.log("收到原始位元組:", value);
+
+                    // 直接餵給協定解析器
+                    parser.feedData(value);
+                }
+            } catch (error) {
+                console.error("讀取中斷錯誤：", error);
+            } finally {
+                reader.releaseLock();
+            }
         }
-    } catch (error) {
-        console.error("讀取中斷：", error);
-    } finally {
-        reader.releaseLock();
+    } catch (err) {
+        console.error("Serial 讀取迴圈異常：", err);
     }
 }
