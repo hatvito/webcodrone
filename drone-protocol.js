@@ -1,4 +1,4 @@
-// drone-protocol.js : 全封包透視與 IMU 解析
+// drone-protocol.js : 修正靜態函數與數據透視
 export class DroneProtocolParser {
     constructor(onDataCallback) {
         this.buffer = [];
@@ -48,7 +48,6 @@ export class DroneProtocolParser {
         const payload = packet.slice(4, packet.length - 2);
         const dataView = new DataView(new Uint8Array(payload).buffer);
 
-        // 限制每秒印出頻率，避免主控台爆掉
         this.packetCount++;
         if (this.packetCount % 30 === 0) {
             console.log(`[封包透視] Type: 0x${dataType.toString(16).toUpperCase()}, 內容(Hex):`, 
@@ -56,29 +55,60 @@ export class DroneProtocolParser {
             );
         }
 
-        // 針對常見的資料封包進行多種位移嘗試 (假設 Roll/Pitch 藏在前幾個 Int16 或 Int8)
-        if (payload.length >= 6) {
+        // 💡 嘗試將收到的數值直接映射到 3D 模型的 Roll / Pitch 讓你看到畫面動起來
+        if (payload.length >= 4) {
             try {
-                // 嘗試不同的解析位移與縮放比例
-                let val1 = dataView.getInt16(0, true);
-                let val2 = dataView.getInt16(2, true);
-                let val3 = dataView.getInt16(4, true);
-
-                // 假設這組數據代表姿態或搖桿，我們直接傳遞給 3D 模型看看有沒有反應
-                // (這裡先將數值對應到 Roll / Pitch，後面可依觀察結果微調)
-                this.onDataCallback('motion', {
-                    roll: val1 / 10.0,
-                    pitch: val2 / 10.0,
-                    yaw: val3 / 10.0
-                });
-            } catch (e) {
-                // 忽略長度不足的例外
-            }
+                // 讀取前兩個位元組作為姿態或搖桿回饋
+                let r = dataView.getInt8(0);
+                let p = dataView.getInt8(1);
+                this.onDataCallback('motion', { roll: r, pitch: p, yaw: 0 });
+            } catch (e) {}
         }
 
         if (dataType === 0x44 && payload.length >= 4) {
             let frontRange = dataView.getInt16(2, true);
             this.onDataCallback('range', { front: frontRange });
         }
+    }
+
+    static calculateChecksum(packetArray) {
+        let crc = 0;
+        for (let i = 2; i < packetArray.length; i++) {
+            crc += packetArray[i];
+        }
+        return [crc & 0xFF, (crc >> 8) & 0xFF];
+    }
+
+    // 確保這些靜態方法正確定義，避免 TypeError
+    static createPairPacket() {
+        let payload = [0x20, 0x00, 0x01, 0x01];
+        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
+        let crc = this.calculateChecksum(packet);
+        packet.push(...crc);
+        return new Uint8Array(packet);
+    }
+
+    static createTakeoffPacket() {
+        let payload = [0x20, 0x10, 0x01, 0x01]; 
+        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
+        let crc = this.calculateChecksum(packet);
+        packet.push(...crc);
+        return new Uint8Array(packet);
+    }
+
+    static createLandPacket() {
+        let payload = [0x20, 0x10, 0x01, 0x02]; 
+        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
+        let crc = this.calculateChecksum(packet);
+        packet.push(...crc);
+        return new Uint8Array(packet);
+    }
+
+    static createStopPacket() {
+        let payload = [0x20, 0x10, 0x01, 0x10]; 
+        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
+        let crc = this.calculateChecksum(packet);
+        packet.push(...crc);
+        return new Uint8Array(packet);
     }
 }
