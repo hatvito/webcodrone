@@ -7,6 +7,7 @@ const twin = initDigitalTwin('canvas-container');
 
 let port;
 let reader;
+let requestInterval = null;
 const connectBtn = document.getElementById('connect-btn');
 const statusText = document.getElementById('status-text');
 const indicator = document.getElementById('connection-indicator');
@@ -40,26 +41,44 @@ connectBtn.addEventListener('click', async () => {
         connectBtn.disabled = true;
         connectBtn.className = "bg-slate-700 text-slate-400 px-5 py-2 rounded-lg font-medium cursor-not-allowed";
 
+        // 開始讀取序列埠資料
         readSerial();
+
+        // 連線成功後，每 100ms 主動向無人機請求一次 RawMotion (0x30) 姿態資料
+        if (port.writable) {
+            requestInterval = setInterval(async () => {
+                try {
+                    const writer = port.writable.getWriter();
+                    const reqPacket = DroneProtocolParser.createRequestPacket(0x20, 0x30); // 0x20 代表 Drone 裝置
+                    await writer.write(reqPacket);
+                    writer.releaseLock();
+                } catch (e) {
+                    console.error("發送請求失敗", e);
+                }
+            }, 100);
+        }
+
     } catch (err) {
         console.error("序列埠連線失敗：", err);
         alert("無法開啟序列埠，請確認瀏覽器支援與裝置連線狀態。");
     }
 });
 
-// 直接讀取二進位串流 (Uint8Array)，不經過文字解碼破壞原始位元組
+// 讀取二進位串流
 async function readSerial() {
+    console.log("-> 進入 readSerial 監聽函式");
     try {
         while (port.readable) {
             reader = port.readable.getReader();
+            console.log("-> 已成功取得 reader，開始讀取序列埠串流...");
             try {
                 while (true) {
                     const { value, done } = await reader.read();
-                    if (done) break;
+                    if (done) {
+                        console.log("-> 串流讀取結束 (done)");
+                        break;
+                    }
                     
-                    // value 是一個 Uint8Array，可打開 F12 主控台檢查收到的原始位元組
-                    // console.log("收到原始位元組:", value);
-
                     // 直接餵給協定解析器
                     parser.feedData(value);
                 }
@@ -73,3 +92,14 @@ async function readSerial() {
         console.error("Serial 讀取迴圈異常：", err);
     }
 }
+
+// 控制按鈕事件綁定
+document.getElementById('btn-takeoff').addEventListener('click', () => {
+    console.log("發送起飛指令...");
+});
+document.getElementById('btn-land').addEventListener('click', () => {
+    console.log("發送降落指令...");
+});
+document.getElementById('btn-stop').addEventListener('click', () => {
+    console.log("發送緊急停止指令...");
+});
