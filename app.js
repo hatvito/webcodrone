@@ -65,7 +65,6 @@ async function readSerial() {
                     }
                     
                     if (value && value.length > 0) {
-                        // console.log("【收到位元組】長度:", value.length, value);
                         parser.feedData(value);
                     }
                 }
@@ -81,49 +80,36 @@ async function readSerial() {
 }
 
 // 輔助函數：透過序列埠發送二進位指令封包
-async function sendCommandPacket(packetArray) {
+async function sendCommandPacket(packetUint8) {
     if (!port || !port.writable) {
         console.warn("序列埠尚未連線或無法寫入");
         return;
     }
     try {
         const writer = port.writable.getWriter();
-        await writer.write(new Uint8Array(packetArray));
+        await writer.write(packetUint8);
         writer.releaseLock();
-        console.log("已發送指令封包:", packetArray);
+        console.log("已發送指令封包:", packetUint8);
     } catch (err) {
         console.error("發送指令失敗:", err);
     }
 }
 
-// 建立控制指令封包
-function createCommandPacket(commandType, option = 0) {
-    let payload = [0x20, 0x00, commandType, option]; 
-    let length = payload.length;
-    let packet = [0x0A, 0x55, 0x11, length, ...payload];
-    let crc = 0;
-    for (let i = 2; i < packet.length; i++) {
-        crc += packet[i];
-    }
-    packet.push(crc & 0xFF, (crc >> 8) & 0xFF);
-    return packet;
-}
-
-// 控制按鈕事件綁定
+// 控制按鈕事件綁定 (調用 DroneProtocolParser 內建的官方對齊指令)
 document.getElementById('btn-takeoff').addEventListener('click', async () => {
     console.log("網頁觸發：起飛！");
-    const packet = createCommandPacket(0x01, 0x00);
+    const packet = DroneProtocolParser.createTakeoffPacket();
     await sendCommandPacket(packet);
 });
 
 document.getElementById('btn-land').addEventListener('click', async () => {
     console.log("網頁觸發：降落！");
-    const packet = createCommandPacket(0x02, 0x00);
+    const packet = DroneProtocolParser.createLandPacket();
     await sendCommandPacket(packet);
 });
 
 document.getElementById('btn-stop').addEventListener('click', async () => {
     console.log("網頁觸發：緊急停止！");
-    const packet = createCommandPacket(0x10, 0x00);
+    const packet = DroneProtocolParser.createStopPacket();
     await sendCommandPacket(packet);
 });
