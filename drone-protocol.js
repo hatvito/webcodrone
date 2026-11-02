@@ -1,8 +1,9 @@
-// drone-protocol.js : 對齊官方協定之解析與編包核心
+// drone-protocol.js : 全封包透視與 IMU 解析
 export class DroneProtocolParser {
     constructor(onDataCallback) {
         this.buffer = [];
         this.onDataCallback = onDataCallback;
+        this.packetCount = 0;
     }
 
     feedData(chunk) {
@@ -47,60 +48,37 @@ export class DroneProtocolParser {
         const payload = packet.slice(4, packet.length - 2);
         const dataView = new DataView(new Uint8Array(payload).buffer);
 
-        if (dataType === 0x30) { // RawMotion (IMU 姿態)
-            if (payload.length >= 6) {
-                let roll = dataView.getInt16(0, true) / 100.0;
-                let pitch = dataView.getInt16(2, true) / 100.0;
-                let yaw = dataView.getInt16(4, true) / 100.0;
-                this.onDataCallback('motion', { roll, pitch, yaw });
-            }
-        } 
-        else if (dataType === 0x44) { // Range (測距)
-            if (payload.length >= 4) {
-                let frontRange = dataView.getInt16(2, true);
-                this.onDataCallback('range', { front: frontRange });
+        // 限制每秒印出頻率，避免主控台爆掉
+        this.packetCount++;
+        if (this.packetCount % 30 === 0) {
+            console.log(`[封包透視] Type: 0x${dataType.toString(16).toUpperCase()}, 內容(Hex):`, 
+                Array.from(payload).map(b => b.toString(16).padStart(2, '0')).join(' ')
+            );
+        }
+
+        // 針對常見的資料封包進行多種位移嘗試 (假設 Roll/Pitch 藏在前幾個 Int16 或 Int8)
+        if (payload.length >= 6) {
+            try {
+                // 嘗試不同的解析位移與縮放比例
+                let val1 = dataView.getInt16(0, true);
+                let val2 = dataView.getInt16(2, true);
+                let val3 = dataView.getInt16(4, true);
+
+                // 假設這組數據代表姿態或搖桿，我們直接傳遞給 3D 模型看看有沒有反應
+                // (這裡先將數值對應到 Roll / Pitch，後面可依觀察結果微調)
+                this.onDataCallback('motion', {
+                    roll: val1 / 10.0,
+                    pitch: val2 / 10.0,
+                    yaw: val3 / 10.0
+                });
+            } catch (e) {
+                // 忽略長度不足的例外
             }
         }
-    }
 
-    static calculateChecksum(packetArray) {
-        let crc = 0;
-        for (let i = 2; i < packetArray.length; i++) {
-            crc += packetArray[i];
+        if (dataType === 0x44 && payload.length >= 4) {
+            let frontRange = dataView.getInt16(2, true);
+            this.onDataCallback('range', { front: frontRange });
         }
-        return [crc & 0xFF, (crc >> 8) & 0xFF];
-    }
-
-    // 💡 官方對應的連線握手/對頻初始化封包 (對應 drone.pair())
-    static createPairPacket() {
-        let payload = [0x20, 0x00, 0x01, 0x01];
-        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
-        let crc = this.calculateChecksum(packet);
-        packet.push(...crc);
-        return new Uint8Array(packet);
-    }
-
-    static createTakeoffPacket() {
-        let payload = [0x20, 0x10, 0x01, 0x01]; 
-        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
-        let crc = this.calculateChecksum(packet);
-        packet.push(...crc);
-        return new Uint8Array(packet);
-    }
-
-    static createLandPacket() {
-        let payload = [0x20, 0x10, 0x01, 0x02]; 
-        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
-        let crc = this.calculateChecksum(packet);
-        packet.push(...crc);
-        return new Uint8Array(packet);
-    }
-
-    static createStopPacket() {
-        let payload = [0x20, 0x10, 0x01, 0x10]; 
-        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
-        let crc = this.calculateChecksum(packet);
-        packet.push(...crc);
-        return new Uint8Array(packet);
     }
 }
