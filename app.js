@@ -1,4 +1,4 @@
-// app.js : 主程式與 UI 互動繫結 (支援網頁端控制發送)
+// app.js : 主程式與 UI 互動繫結
 import { initDigitalTwin } from './digital-twin.js';
 import { DroneProtocolParser } from './drone-protocol.js';
 
@@ -7,7 +7,6 @@ const twin = initDigitalTwin('canvas-container');
 
 let port;
 let reader;
-let writer;
 const connectBtn = document.getElementById('connect-btn');
 const statusText = document.getElementById('status-text');
 const indicator = document.getElementById('connection-indicator');
@@ -31,6 +30,7 @@ const parser = new DroneProtocolParser((type, data) => {
 connectBtn.addEventListener('click', async () => {
     try {
         port = await navigator.serial.requestPort();
+        // 確保鮑率與 CoDrone EDU 遙控器一致 (115200)
         await port.open({ baudRate: 115200 });
 
         statusText.textContent = "已連線";
@@ -40,7 +40,7 @@ connectBtn.addEventListener('click', async () => {
         connectBtn.disabled = true;
         connectBtn.className = "bg-slate-700 text-slate-400 px-5 py-2 rounded-lg font-medium cursor-not-allowed";
 
-        // 啟動讀取串流
+        // 開始讀取序列埠資料
         readSerial();
 
     } catch (err) {
@@ -51,14 +51,21 @@ connectBtn.addEventListener('click', async () => {
 
 // 讀取二進位串流
 async function readSerial() {
+    console.log("-> 進入 readSerial 監聽函式");
     try {
         while (port.readable) {
             reader = port.readable.getReader();
+            console.log("-> 已成功取得 reader，開始讀取序列埠串流...");
             try {
                 while (true) {
                     const { value, done } = await reader.read();
-                    if (done) break;
+                    if (done) {
+                        console.log("-> 串流讀取結束 (done)");
+                        break;
+                    }
+                    
                     if (value && value.length > 0) {
+                        // console.log("【收到位元組】長度:", value.length, value);
                         parser.feedData(value);
                     }
                 }
@@ -80,49 +87,43 @@ async function sendCommandPacket(packetArray) {
         return;
     }
     try {
-        const localWriter = port.writable.getWriter();
-        await localWriter.write(new Uint8Array(packetArray));
-        localWriter.releaseLock();
+        const writer = port.writable.getWriter();
+        await writer.write(new Uint8Array(packetArray));
+        writer.releaseLock();
         console.log("已發送指令封包:", packetArray);
     } catch (err) {
         console.error("發送指令失敗:", err);
     }
 }
 
-// --- 網頁控制按鈕事件綁定 (把按鈕轉化為實體控制指令) ---
+// 建立控制指令封包
+function createCommandPacket(commandType, option = 0) {
+    let payload = [0x20, 0x00, commandType, option]; 
+    let length = payload.length;
+    let packet = [0x0A, 0x55, 0x11, length, ...payload];
+    let crc = 0;
+    for (let i = 2; i < packet.length; i++) {
+        crc += packet[i];
+    }
+    packet.push(crc & 0xFF, (crc >> 8) & 0xFF);
+    return packet;
+}
 
-// 起飛按鈕 (發送起飛 Command 封包)
+// 控制按鈕事件綁定
 document.getElementById('btn-takeoff').addEventListener('click', async () => {
     console.log("網頁觸發：起飛！");
-    // Byrobot 協定中，控制指令通常透過特定 DataType (如 0x10 控制 或 0x11 命令)
-    // 這裡示範發送一個標準的起飛命令位元組陣列
-    const takeoffPacket = [0x0A, 0x55, 0x11, 0x02, 0x20, 0x00, 0x01, 0x00]; // 結構範例
-    // 計算簡單 CRC
-    let crc = 0;
-    for(let i=2; i<takeoffPacket.length; i++) crc += takeoffPacket[i];
-    takeoffPacket.push(crc & 0xFF, (crc >> 8) & 0xFF);
-    
-    await sendCommandPacket(takeoffPacket);
+    const packet = createCommandPacket(0x01, 0x00);
+    await sendCommandPacket(packet);
 });
 
-// 降落按鈕
 document.getElementById('btn-land').addEventListener('click', async () => {
     console.log("網頁觸發：降落！");
-    const landPacket = [0x0A, 0x55, 0x11, 0x02, 0x20, 0x00, 0x02, 0x00];
-    let crc = 0;
-    for(let i=2; i<landPacket.length; i++) crc += landPacket[i];
-    landPacket.push(crc & 0xFF, (crc >> 8) & 0xFF);
-
-    await sendCommandPacket(landPacket);
+    const packet = createCommandPacket(0x02, 0x00);
+    await sendCommandPacket(packet);
 });
 
-// 緊急停止按鈕
 document.getElementById('btn-stop').addEventListener('click', async () => {
     console.log("網頁觸發：緊急停止！");
-    const stopPacket = [0x0A, 0x55, 0x11, 0x02, 0x20, 0x00, 0x10, 0x00];
-    let crc = 0;
-    for(let i=2; i<stopPacket.length; i++) crc += stopPacket[i];
-    stopPacket.push(crc & 0xFF, (crc >> 8) & 0xFF);
-
-    await sendCommandPacket(stopPacket);
+    const packet = createCommandPacket(0x10, 0x00);
+    await sendCommandPacket(packet);
 });
