@@ -47,23 +47,18 @@ connectBtn.addEventListener('click', async () => {
     }
 });
 
-// 讀取二進位串流，並加入詳細除錯日誌
+// 直接讀取二進位串流 (Uint8Array)，不經過文字解碼破壞原始位元組
 async function readSerial() {
-    console.log("-> 進入 readSerial 監聽函式");
     try {
         while (port.readable) {
             reader = port.readable.getReader();
-            console.log("-> 已成功取得 reader，開始讀取序列埠串流...");
             try {
                 while (true) {
                     const { value, done } = await reader.read();
-                    if (done) {
-                        console.log("-> 串流讀取結束 (done)");
-                        break;
-                    }
+                    if (done) break;
                     
-                    // 只要有收到資料，F12 主控台一定會印出這行
-                    console.log("【收到原始位元組】長度:", value.length, value);
+                    // value 是一個 Uint8Array，可打開 F12 主控台檢查收到的原始位元組
+                    // console.log("收到原始位元組:", value);
 
                     // 直接餵給協定解析器
                     parser.feedData(value);
