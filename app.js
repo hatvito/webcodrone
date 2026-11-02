@@ -2,7 +2,6 @@
 import { initDigitalTwin } from './digital-twin.js';
 import { DroneProtocolParser } from './drone-protocol.js';
 
-// 初始化 3D 畫面
 const twin = initDigitalTwin('canvas-container');
 
 let port;
@@ -11,7 +10,6 @@ const connectBtn = document.getElementById('connect-btn');
 const statusText = document.getElementById('status-text');
 const indicator = document.getElementById('connection-indicator');
 
-// 建立協定解析器
 const parser = new DroneProtocolParser((type, data) => {
     if (type === 'motion') {
         document.getElementById('val-roll').textContent = data.roll.toFixed(1) + '°';
@@ -26,11 +24,9 @@ const parser = new DroneProtocolParser((type, data) => {
     }
 });
 
-// 序列埠連線按鈕
 connectBtn.addEventListener('click', async () => {
     try {
         port = await navigator.serial.requestPort();
-        // 確保鮑率與 CoDrone EDU 遙控器一致 (115200)
         await port.open({ baudRate: 115200 });
 
         statusText.textContent = "已連線";
@@ -40,8 +36,17 @@ connectBtn.addEventListener('click', async () => {
         connectBtn.disabled = true;
         connectBtn.className = "bg-slate-700 text-slate-400 px-5 py-2 rounded-lg font-medium cursor-not-allowed";
 
-        // 開始讀取序列埠資料
         readSerial();
+
+        // 💡 連線成功後，自動發送一次官方對應的 pair 初始化握手封包
+        setTimeout(async () => {
+            if (port && port.writable) {
+                const writer = port.writable.getWriter();
+                await writer.write(DroneProtocolParser.createPairPacket());
+                writer.releaseLock();
+                console.log("已發送官方 Pair 初始化握手封包");
+            }
+        }, 500);
 
     } catch (err) {
         console.error("序列埠連線失敗：", err);
@@ -49,21 +54,14 @@ connectBtn.addEventListener('click', async () => {
     }
 });
 
-// 讀取二進位串流
 async function readSerial() {
-    console.log("-> 進入 readSerial 監聽函式");
     try {
         while (port.readable) {
             reader = port.readable.getReader();
-            console.log("-> 已成功取得 reader，開始讀取序列埠串流...");
             try {
                 while (true) {
                     const { value, done } = await reader.read();
-                    if (done) {
-                        console.log("-> 串流讀取結束 (done)");
-                        break;
-                    }
-                    
+                    if (done) break;
                     if (value && value.length > 0) {
                         parser.feedData(value);
                     }
@@ -79,7 +77,6 @@ async function readSerial() {
     }
 }
 
-// 輔助函數：透過序列埠發送二進位指令封包
 async function sendCommandPacket(packetUint8) {
     if (!port || !port.writable) {
         console.warn("序列埠尚未連線或無法寫入");
@@ -95,11 +92,25 @@ async function sendCommandPacket(packetUint8) {
     }
 }
 
-// 控制按鈕事件綁定 (調用 DroneProtocolParser 內建的官方對齊指令)
+// 點擊起飛：先發送 Pair 確保就緒，再執行起飛，1秒後自動降落
 document.getElementById('btn-takeoff').addEventListener('click', async () => {
-    console.log("網頁觸發：起飛！");
-    const packet = DroneProtocolParser.createTakeoffPacket();
-    await sendCommandPacket(packet);
+    console.log("網頁觸發：初始化並起飛！");
+    
+    // 確保起飛前發送 pair 握手
+    await sendCommandPacket(DroneProtocolParser.createPairPacket());
+    
+    // 稍微延遲 100ms 後發送起飛指令
+    setTimeout(async () => {
+        const takeoffPacket = DroneProtocolParser.createTakeoffPacket();
+        await sendCommandPacket(takeoffPacket);
+    }, 100);
+
+    // 1秒後自動降落停止
+    setTimeout(async () => {
+        console.log("網頁觸發：1秒到，自動降落！");
+        const landPacket = DroneProtocolParser.createLandPacket();
+        await sendCommandPacket(landPacket);
+    }, 1100);
 });
 
 document.getElementById('btn-land').addEventListener('click', async () => {
