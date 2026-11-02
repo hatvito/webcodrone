@@ -7,7 +7,6 @@ const twin = initDigitalTwin('canvas-container');
 
 let port;
 let reader;
-let requestInterval = null;
 const connectBtn = document.getElementById('connect-btn');
 const statusText = document.getElementById('status-text');
 const indicator = document.getElementById('connection-indicator');
@@ -44,20 +43,6 @@ connectBtn.addEventListener('click', async () => {
         // 開始讀取序列埠資料
         readSerial();
 
-        // 連線成功後，每 100ms 主動向無人機請求一次 RawMotion (0x30) 姿態資料
-        if (port.writable) {
-            requestInterval = setInterval(async () => {
-                try {
-                    const writer = port.writable.getWriter();
-                    const reqPacket = DroneProtocolParser.createRequestPacket(0x20, 0x30); // 0x20 代表 Drone 裝置
-                    await writer.write(reqPacket);
-                    writer.releaseLock();
-                } catch (e) {
-                    console.error("發送請求失敗", e);
-                }
-            }, 100);
-        }
-
     } catch (err) {
         console.error("序列埠連線失敗：", err);
         alert("無法開啟序列埠，請確認瀏覽器支援與裝置連線狀態。");
@@ -70,7 +55,7 @@ async function readSerial() {
     try {
         while (port.readable) {
             reader = port.readable.getReader();
-            console.log("-> 已成功取得 reader，開始讀取序列埠串流...");
+            console.log("-> 已成功取得 reader，開始進入 read() 迴圈等待資料...");
             try {
                 while (true) {
                     const { value, done } = await reader.read();
@@ -79,8 +64,10 @@ async function readSerial() {
                         break;
                     }
                     
-                    // 直接餵給協定解析器
-                    parser.feedData(value);
+                    if (value && value.length > 0) {
+                        console.log("【收到位元組】長度:", value.length, value);
+                        parser.feedData(value);
+                    }
                 }
             } catch (error) {
                 console.error("讀取中斷錯誤：", error);
