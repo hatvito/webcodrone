@@ -1,4 +1,4 @@
-// drone-protocol.js : 修正語法錯誤的協定核心
+// drone-protocol.js : 整合狀態回報與 IMU 姿態解析
 export class DroneProtocolParser {
     constructor(onDataCallback) {
         this.buffer = [];
@@ -50,10 +50,20 @@ export class DroneProtocolParser {
     }
 
     handlePacket(dataType, payload) {
+        // 1. 狀態與電池回報 (0x40)
         if (dataType === 0x40 && payload.length >= 8) {
             let battery = payload[7];
             let flightState = payload[1];
             this.onDataCallback('state', { battery, flightState });
+        }
+        // 2. IMU 姿態與動作回報 (0x30 RawMotion)
+        else if (dataType === 0x30 && payload.length >= 6) {
+            const dataView = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+            // Byrobot 協議通常以 Int16 傳遞角度，縮放因數為 100
+            let roll = dataView.getInt16(0, true) / 100.0;
+            let pitch = dataView.getInt16(2, true) / 100.0;
+            let yaw = dataView.getInt16(4, true) / 100.0;
+            this.onDataCallback('motion', { roll, pitch, yaw });
         }
     }
 
@@ -76,7 +86,6 @@ export class DroneProtocolParser {
         let rawHeaderAndPayload = new Uint8Array([...header, ...payload]);
         let crc = this.crc16(rawHeaderAndPayload);
         
-        // 修正後的正確組合寫法 (移除原本多餘且報錯的匿名立即執行函數)
         let packet = new Uint8Array(2 + rawHeaderAndPayload.length + 2);
         packet[0] = 0x0A;
         packet[1] = 0x55;
