@@ -1,4 +1,4 @@
-// drone-protocol.js : CoDrone EDU 通訊協定解析與編包核心
+// drone-protocol.js : CoDrone EDU 通訊協定解析與編包核心（支援 0x40 狀態與 0x71/0x30 IMU 姿態解析）
 export class DroneProtocolParser {
     constructor(onDataCallback) {
         this.buffer = [];
@@ -63,9 +63,10 @@ export class DroneProtocolParser {
             let flightState = payload[1];
             this.onDataCallback('state', { battery, flightState });
         }
-        // 2. IMU 姿態與動作回報 (0x30 RawMotion)
-        else if (dataType === 0x30 && payload.length >= 6) {
+        // 2. IMU 姿態與動作回報 (支援 0x71 或 0x30)
+        else if ((dataType === 0x71 || dataType === 0x30) && payload.length >= 6) {
             const dataView = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+            // 嘗試解析前三個 Int16 作為 Roll, Pitch, Yaw
             let roll = dataView.getInt16(0, true) / 100.0;
             let pitch = dataView.getInt16(2, true) / 100.0;
             let yaw = dataView.getInt16(4, true) / 100.0;
