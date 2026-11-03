@@ -1,7 +1,8 @@
-// app.js : 整合 57600 鮑率與正確狀態輪詢
+// app.js : 主程式與 3D 數位雙胞胎連動
 import { initDigitalTwin } from './digital-twin.js';
 import { DroneProtocolParser } from './drone-protocol.js';
 
+// 初始化 3D 畫面
 const twin = initDigitalTwin('canvas-container');
 
 let port;
@@ -13,16 +14,22 @@ const indicator = document.getElementById('connection-indicator');
 
 const parser = new DroneProtocolParser((type, data) => {
     if (type === 'state') {
-        console.log(`[硬體回報] 電池: ${data.battery}%, 狀態碼: ${data.flightState}`);
-        // 可以在畫面上顯示電池資訊
         document.getElementById('val-front-range').textContent = `電池: ${data.battery}%`;
+    }
+    else if (type === 'motion') {
+        // 即時更新介面上的數值顯示
+        document.getElementById('val-roll').textContent = data.roll.toFixed(1) + '°';
+        document.getElementById('val-pitch').textContent = data.pitch.toFixed(1) + '°';
+        document.getElementById('val-yaw').textContent = data.yaw.toFixed(1) + '°';
+        
+        // 💡 驅動 3D 數位雙胞胎模型同步旋轉
+        twin.updatePose(data.roll, data.pitch, data.yaw);
     }
 });
 
 connectBtn.addEventListener('click', async () => {
     try {
         port = await navigator.serial.requestPort();
-        // 💡 關鍵修正：鮑率改為正確的 57600
         await port.open({ baudRate: 57600 });
 
         statusText.textContent = "已連線 (57600)";
@@ -34,7 +41,7 @@ connectBtn.addEventListener('click', async () => {
 
         readSerial();
 
-        // 每秒主動發送一次狀態請求封包（就像剛才 python 腳本一樣）
+        // 定期發送狀態請求，保持通訊與回報
         pollInterval = setInterval(async () => {
             if (port && port.writable) {
                 const writer = port.writable.getWriter();
@@ -45,7 +52,7 @@ connectBtn.addEventListener('click', async () => {
 
     } catch (err) {
         console.error("序列埠連線失敗：", err);
-        alert("無法開啟序列埠，請確認鮑率與硬體連線。");
+        alert("無法開啟序列埠，請確認硬體連線。");
     }
 });
 
@@ -73,26 +80,20 @@ async function readSerial() {
 }
 
 async function sendCommandPacket(packetUint8) {
-    if (!port || !port.writable) {
-        console.warn("序列埠尚未連線");
-        return;
-    }
+    if (!port || !port.writable) return;
     try {
         const writer = port.writable.getWriter();
         await writer.write(packetUint8);
         writer.releaseLock();
-        console.log("已發送指令封包:", packetUint8);
     } catch (err) {
         console.error("發送指令失敗:", err);
     }
 }
 
 document.getElementById('btn-takeoff').addEventListener('click', async () => {
-    console.log("網頁觸發：起飛！");
     await sendCommandPacket(DroneProtocolParser.createTakeoffPacket());
 });
 
 document.getElementById('btn-land').addEventListener('click', async () => {
-    console.log("網頁觸發：降落！");
     await sendCommandPacket(DroneProtocolParser.createLandPacket());
 });
