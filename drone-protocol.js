@@ -1,9 +1,8 @@
-// drone-protocol.js : 修正靜態函數與數據透視
+// drone-protocol.js : 對齊 Python 實測驗證的 Byrobot 協議核心
 export class DroneProtocolParser {
     constructor(onDataCallback) {
         this.buffer = [];
         this.onDataCallback = onDataCallback;
-        this.packetCount = 0;
     }
 
     feedData(chunk) {
@@ -31,84 +30,82 @@ export class DroneProtocolParser {
 
             if (this.buffer.length < 4) break;
 
-            let dataType = this.buffer[2];
-            let dataLength = this.buffer[3];
-            let totalSize = 4 + dataLength + 2;
+            let length = this.buffer[3];
+            let totalSize = 2 + 4 + length + 2; // Start(2) + Header(4) + Payload + CRC(2)
 
             if (this.buffer.length < totalSize) break;
 
-            let packet = this.buffer.slice(0, totalSize);
+            let frame = new Uint8Array(this.buffer.slice(0, totalSize));
             this.buffer = this.buffer.slice(totalSize);
 
-            this.handlePacket(dataType, packet);
+            // 驗證 CRC16
+            let payloadAndHeader = frame.slice(2, frame.length - 2);
+            let gotCrc = frame[frame.length - 2] | (frame[frame.length - 1] << 8);
+            
+            if (DroneProtocolParser.crc16(payloadAndHeader) === gotCrc) {
+                let dataType = frame[2];
+                let frm = frame[4];
+                let to = frame[5];
+                let payload = frame.slice(6, frame.length - 2);
+                this.handlePacket(dataType, payload);
+            }
         }
     }
 
-    handlePacket(dataType, packet) {
-        const payload = packet.slice(4, packet.length - 2);
-        const dataView = new DataView(new Uint8Array(payload).buffer);
-
-        this.packetCount++;
-        if (this.packetCount % 30 === 0) {
-            console.log(`[封包透視] Type: 0x${dataType.toString(16).toUpperCase()}, 內容(Hex):`, 
-                Array.from(payload).map(b => b.toString(16).padStart(2, '0')).join(' ')
-            );
-        }
-
-        // 💡 嘗試將收到的數值直接映射到 3D 模型的 Roll / Pitch 讓你看到畫面動起來
-        if (payload.length >= 4) {
-            try {
-                // 讀取前兩個位元組作為姿態或搖桿回饋
-                let r = dataView.getInt8(0);
-                let p = dataView.getInt8(1);
-                this.onDataCallback('motion', { roll: r, pitch: p, yaw: 0 });
-            } catch (e) {}
-        }
-
-        if (dataType === 0x44 && payload.length >= 4) {
-            let frontRange = dataView.getInt16(2, true);
-            this.onDataCallback('range', { front: frontRange });
+    handlePacket(dataType, payload) {
+        // DT_STATE = 0x40 (狀態回報，包含電池百分比)
+        if (dataType === 0x40 && payload.length >= 8) {
+            let battery = payload[7]; // 電池百分比在第 8 個 byte
+            let flightState = payload[1]; // 飛行狀態
+            this.onDataCallback('state', { battery, flightState });
         }
     }
 
-    static calculateChecksum(packetArray) {
-        let crc = 0;
-        for (let i = 2; i < packetArray.length; i++) {
-            crc += packetArray[i];
+    // JavaScript 版的 CRC16-CCITT (對應 Python 實作)
+    static crc16(data, crc = 0) {
+        for (let b of data) {
+            crc ^= (b << 8);
+            for (let i = 0; i < 8; i++) {
+                if (crc & 0x8000) {
+                    crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
+                } else {
+                    crc = (crc << 1) & 0xFFFF;
+                }
+            }
         }
-        return [crc & 0xFF, (crc >> 8) & 0xFF];
+        return crc & 0xFFFF;
     }
 
-    // 確保這些靜態方法正確定義，避免 TypeError
-    static createPairPacket() {
-        let payload = [0x20, 0x00, 0x01, 0x01];
-        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
-        let crc = this.calculateChecksum(packet);
-        packet.push(...crc);
-        return new Uint8Array(packet);
+    // 建立通用封包
+    static buildPacket(dataType, payload, to = 0x10, frm = 0x70) {
+        let header = [dataType, payload.length, frm, to];
+        let rawHeaderAndPayload = new Uint8Array([...header, ...payload]);
+        let crc = this.crc16(rawHeaderAndPayload);
+        
+        let packet = new Uint8Array(2 + rawHeaderAndPayload.length + 2);
+        packet[0] = 0x0A;
+        packet[1] = 0x55;
+        packet.set(rawHeaderAndPayload, 2);
+        packet[set => {
+            packet[packet.length - 2] = crc & 0xFF;
+            packet[packet.length - 1] = crc >> 8;
+        }()];
+        return packet;
     }
 
+    // 產生要求狀態封包 (Request State -> 可用來讀取電池與確認連線)
+    static createRequestStatePacket() {
+        return this.buildPacket(0x04, new Uint8Array([0x40]));
+    }
+
+    // 產生起飛指令封包
     static createTakeoffPacket() {
-        let payload = [0x20, 0x10, 0x01, 0x01]; 
-        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
-        let crc = this.calculateChecksum(packet);
-        packet.push(...crc);
-        return new Uint8Array(packet);
+        // 依據協議：Flight Command
+        return this.buildPacket(0x11, new Uint8Array([0x20, 0x10, 0x01, 0x01]));
     }
 
+    // 產生降落指令封包
     static createLandPacket() {
-        let payload = [0x20, 0x10, 0x01, 0x02]; 
-        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
-        let crc = this.calculateChecksum(packet);
-        packet.push(...crc);
-        return new Uint8Array(packet);
-    }
-
-    static createStopPacket() {
-        let payload = [0x20, 0x10, 0x01, 0x10]; 
-        let packet = [0x0A, 0x55, 0x11, payload.length, ...payload];
-        let crc = this.calculateChecksum(packet);
-        packet.push(...crc);
-        return new Uint8Array(packet);
+        return this.buildPacket(0x11, new Uint8Array([0x20, 0x10, 0x01, 0x02]));
     }
 }
