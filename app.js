@@ -1,4 +1,4 @@
-// app.js : 主程式與 UI 互動繫結
+// app.js : 整合 57600 鮑率與正確狀態輪詢
 import { initDigitalTwin } from './digital-twin.js';
 import { DroneProtocolParser } from './drone-protocol.js';
 
@@ -6,30 +6,26 @@ const twin = initDigitalTwin('canvas-container');
 
 let port;
 let reader;
+let pollInterval;
 const connectBtn = document.getElementById('connect-btn');
 const statusText = document.getElementById('status-text');
 const indicator = document.getElementById('connection-indicator');
 
 const parser = new DroneProtocolParser((type, data) => {
-    if (type === 'motion') {
-        document.getElementById('val-roll').textContent = data.roll.toFixed(1) + '°';
-        document.getElementById('val-pitch').textContent = data.pitch.toFixed(1) + '°';
-        document.getElementById('val-yaw').textContent = data.yaw.toFixed(1) + '°';
-        twin.updatePose(data.roll, data.pitch, data.yaw);
-    } 
-    else if (type === 'range') {
-        document.getElementById('val-front-range').textContent = data.front + ' mm';
-        const warning = document.getElementById('range-warning');
-        warning.className = data.front < 300 ? "w-3 h-3 rounded-full bg-rose-500 animate-ping" : "w-3 h-3 rounded-full bg-emerald-500";
+    if (type === 'state') {
+        console.log(`[硬體回報] 電池: ${data.battery}%, 狀態碼: ${data.flightState}`);
+        // 可以在畫面上顯示電池資訊
+        document.getElementById('val-front-range').textContent = `電池: ${data.battery}%`;
     }
 });
 
 connectBtn.addEventListener('click', async () => {
     try {
         port = await navigator.serial.requestPort();
-        await port.open({ baudRate: 115200 });
+        // 💡 關鍵修正：鮑率改為正確的 57600
+        await port.open({ baudRate: 57600 });
 
-        statusText.textContent = "已連線";
+        statusText.textContent = "已連線 (57600)";
         statusText.className = "text-sm text-emerald-400 font-medium";
         indicator.className = "w-3 h-3 bg-emerald-500 rounded-full shadow-[0_0_10px_#10b981]";
         connectBtn.textContent = "已連線";
@@ -38,19 +34,18 @@ connectBtn.addEventListener('click', async () => {
 
         readSerial();
 
-        // 💡 連線成功後，自動發送一次官方對應的 pair 初始化握手封包
-        setTimeout(async () => {
+        // 每秒主動發送一次狀態請求封包（就像剛才 python 腳本一樣）
+        pollInterval = setInterval(async () => {
             if (port && port.writable) {
                 const writer = port.writable.getWriter();
-                await writer.write(DroneProtocolParser.createPairPacket());
+                await writer.write(DroneProtocolParser.createRequestStatePacket());
                 writer.releaseLock();
-                console.log("已發送官方 Pair 初始化握手封包");
             }
-        }, 500);
+        }, 1000);
 
     } catch (err) {
         console.error("序列埠連線失敗：", err);
-        alert("無法開啟序列埠，請確認瀏覽器支援與裝置連線狀態。");
+        alert("無法開啟序列埠，請確認鮑率與硬體連線。");
     }
 });
 
@@ -79,7 +74,7 @@ async function readSerial() {
 
 async function sendCommandPacket(packetUint8) {
     if (!port || !port.writable) {
-        console.warn("序列埠尚未連線或無法寫入");
+        console.warn("序列埠尚未連線");
         return;
     }
     try {
@@ -92,35 +87,12 @@ async function sendCommandPacket(packetUint8) {
     }
 }
 
-// 點擊起飛：先發送 Pair 確保就緒，再執行起飛，1秒後自動降落
 document.getElementById('btn-takeoff').addEventListener('click', async () => {
-    console.log("網頁觸發：初始化並起飛！");
-    
-    // 確保起飛前發送 pair 握手
-    await sendCommandPacket(DroneProtocolParser.createPairPacket());
-    
-    // 稍微延遲 100ms 後發送起飛指令
-    setTimeout(async () => {
-        const takeoffPacket = DroneProtocolParser.createTakeoffPacket();
-        await sendCommandPacket(takeoffPacket);
-    }, 100);
-
-    // 1秒後自動降落停止
-    setTimeout(async () => {
-        console.log("網頁觸發：1秒到，自動降落！");
-        const landPacket = DroneProtocolParser.createLandPacket();
-        await sendCommandPacket(landPacket);
-    }, 1100);
+    console.log("網頁觸發：起飛！");
+    await sendCommandPacket(DroneProtocolParser.createTakeoffPacket());
 });
 
 document.getElementById('btn-land').addEventListener('click', async () => {
     console.log("網頁觸發：降落！");
-    const packet = DroneProtocolParser.createLandPacket();
-    await sendCommandPacket(packet);
-});
-
-document.getElementById('btn-stop').addEventListener('click', async () => {
-    console.log("網頁觸發：緊急停止！");
-    const packet = DroneProtocolParser.createStopPacket();
-    await sendCommandPacket(packet);
+    await sendCommandPacket(DroneProtocolParser.createLandPacket());
 });
