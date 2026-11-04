@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CoDrone EDU 控制台 - 前方測距測試</title>
+<title>CoDrone EDU 控制台 - 360° 雷達掃描</title>
 <style>
 :root{--bg:#e8ebe6;--panel:#f5f6f2;--ink:#17262b;--mute:#66767a;--line:#cfd5ce;--teal:#0e6a73;--amber:#a85a00;--red:#b3261e;--con:#10201f;--conink:#cfe3df}
 *{box-sizing:border-box}
@@ -33,13 +33,12 @@ main{display:grid;gap:14px;padding:14px;max-width:1240px;margin:0 auto}
 .bar{position:relative;height:8px;background:#dde2dc;border-radius:4px}
 .bar::after{content:"";position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:#8a9a9d}
 .bar i{position:absolute;top:0;bottom:0;background:var(--teal);border-radius:4px}
-.raw{margin-top:10px;font:12px ui-monospace,Menlo,Consolas,monospace;color:var(--mute)}
 .btns{display:flex;flex-wrap:wrap;gap:8px}
 .note{color:var(--mute);font-size:13px;margin:8px 0 0}
-.console{display:flex;flex-direction:column;min-height:420px}
+.console{display:flex;flex-direction:column;min-height:300px}
 .tools{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:8px;font-size:13px}
 .tools button{padding:4px 10px}
-#log{flex:1;min-height:340px;max-height:72vh;overflow:auto;background:var(--con);color:var(--conink);border-radius:6px;padding:8px 10px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace}
+#log{flex:1;min-height:200px;max-height:40vh;overflow:auto;background:var(--con);color:var(--conink);border-radius:6px;padding:8px 10px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace}
 #log div{white-space:pre-wrap;word-break:break-all}
 .tx{color:#8fd3e8}.err{color:#ff9d93}.warn{color:#f2c56b}.info{color:#9fb3ae}
 dialog{border:2px solid var(--amber);border-radius:10px;max-width:520px;padding:18px}
@@ -47,16 +46,18 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
 dialog h3{margin:0 0 8px}
 dialog ul{margin:8px 0 14px;padding-left:20px}
 dialog .row{display:flex;gap:10px;justify-content:flex-end}
-.twin{position:relative;height:380px;background:#e9ede8;border-radius:6px;overflow:hidden}
+.twin{position:relative;height:320px;background:#e9ede8;border-radius:6px;overflow:hidden}
 .twin canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
 .twin .ov{position:absolute;left:8px;top:8px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:rgba(245,246,242,.85);padding:5px 9px;border-radius:5px;white-space:pre;pointer-events:none}
 .rcol{display:grid;gap:14px;align-content:start}
+.radar-box{text-align:center;background:#fff;border:1px solid var(--line);border-radius:6px;padding:10px}
+#radarCanvas{background:#111;border-radius:50%;display:block;margin:0 auto;}
 @media(prefers-reduced-motion:no-preference){button{transition:background .12s}}
 </style>
 </head>
 <body>
 <header>
-  <h1>CoDrone EDU 控制台 - 測距測試</h1>
+  <h1>CoDrone EDU 控制台 - 360° 雷達掃描</h1>
   <span id="conn" class="badge">未連線</span>
   <button id="btnConnect" class="primary">連接控制器</button>
   <button id="btnDisc" disabled>中斷連線</button>
@@ -78,16 +79,21 @@ dialog .row{display:flex;gap:10px;justify-content:flex-end}
     </section>
 
     <section class="panel">
-      <h2>IMU 姿態（唯讀）</h2>
-      <div class="tools" style="margin-bottom:4px"><label><input type="checkbox" id="imuOn" checked> 即時更新 IMU 與數位雙生（各約 5 Hz）</label></div>
-      <div class="imu" id="imu"></div>
-      <div class="raw" id="raw">RawMotion 原始值：—</div>
+      <h2>360° 簡易環境雷達</h2>
+      <div class="radar-box">
+        <canvas id="radarCanvas" width="280" height="280"></canvas>
+        <div class="tools" style="justify-content:center; margin-top:10px;">
+          <label><input type="checkbox" id="enableScan" checked> 啟用雷達記錄</label>
+          <button id="btnClearRadar">清除雷達圖</button>
+        </div>
+      </div>
+      <p class="note">手持無人機在原地緩慢轉動 360 度，雷達圖會以機頭前方為基準記錄周遭距離。</p>
     </section>
 
     <section class="panel">
-      <h2>飛行</h2>
+      <h2>飛行控制</h2>
       <div class="btns">
-        <button id="btnFirst" disabled>首飛程序（起飛 → 懸停 2 秒 → 降落）</button>
+        <button id="btnFirst" disabled>首飛程序</button>
         <button id="btnTakeoff" disabled>起飛</button>
         <button id="btnLand" disabled>降落</button>
       </div>
@@ -102,25 +108,19 @@ dialog .row{display:flex;gap:10px;justify-content:flex-end}
       <button id="twinYaw">Yaw 歸零</button><button id="twinClear">清除軌跡</button>
       <label><input type="checkbox" id="flipRoll"> Roll 反向</label>
       <label><input type="checkbox" id="flipPitch"> Pitch 反向</label>
-      <label><input type="checkbox" id="flipYaw"> Yaw 反向</label>
+      <label><input type="checkbox" id="flipYaw" checked> Yaw 反向</label>
     </div>
   </section>
   <section class="panel console">
     <h2>主控台</h2>
     <div class="tools">
-      <label><input type="checkbox" id="hidePoll" checked> 隱藏輪詢與搖桿封包（State / Range / IMU / Position / Joystick）</label>
+      <label><input type="checkbox" id="hidePoll" checked> 隱藏輪詢與搖桿封包</label>
       <button id="btnClear">清除</button>
     </div>
     <div id="log" role="log" aria-live="off"></div>
   </section>
   </div>
 </main>
-
-<dialog id="dlg">
-  <h3 id="dlgTitle"></h3>
-  <div id="dlgBody"></div>
-  <div class="row"><button id="dlgNo">取消</button><button id="dlgYes" class="primary">確認，讓實機動作</button></div>
-</dialog>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
@@ -179,9 +179,60 @@ const T_STATE = 0x40, T_RANGE = 0x45, T_MOTION = 0x44, T_RAW = 0x30, T_POS = 0x4
 const NAMES = { [T_STATE]: 'State', [T_RANGE]: 'Range', [T_MOTION]: 'Motion', [T_RAW]: 'RawMotion', [T_POS]: 'Position', [T_JOY]: 'Joystick' };
 const FLIGHT = { 0x10: '待命', 0x11: '啟動中', 0x12: '起飛中', 0x13: '飛行中', 0x14: '降落中', 0x15: '翻滾', 0x16: '反向', 0x20: '已停止', 0x30: '意外', 0x31: '錯誤' };
 
-let port, reader, writer, readDone, wq = Promise.resolve();
-let connected = false, busy = false, abort = false, current = Promise.resolve();
-const st = { flight: null, battery: null, t: 0 };
+let port, reader, writer, readDone;
+let connected = false;
+const st = { flight: null, battery: null, t: 0, yaw: 0, front: 0 };
+
+// ---------- 雷達圖初始化與繪製 ----------
+const radarCv = $('radarCanvas'), ctx = radarCv.getContext('2d');
+const radarPoints = [];
+$('btnClearRadar').onclick = () => { radarPoints.length = 0; drawRadar(); };
+
+function drawRadar() {
+  const w = radarCv.width, h = radarCv.height, cx = w / 2, cy = h / 2;
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, w, h);
+
+  // 畫同心圓網格 (代表距離，例如 50cm, 100cm, 200cm)
+  ctx.strokeStyle = '#225522';
+  ctx.lineWidth = 1;
+  [0.5, 1.0, 2.0].forEach(m => {
+    const r = (m * 1000 / 2500) * (w / 2); // 假設最大量測 2.5公尺
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#448844';
+    ctx.font = '9px monospace';
+    ctx.fillText(m + 'm', cx + 4, cy - r + 10);
+  });
+
+  // 十字線
+  ctx.strokeStyle = '#224422';
+  ctx.beginPath();
+  ctx.moveTo(0, cy); ctx.lineTo(w, cy);
+  ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
+  ctx.stroke();
+
+  // 畫出累積的掃描點
+  ctx.fillStyle = '#3ddc84';
+  for (const pt of radarPoints) {
+    // pt.yaw 為角度，pt.dist 為 mm
+    if (pt.dist <= 0) continue;
+    const rad = (pt.yaw - 90) * (Math.PI / 180); // 讓 0 度朝上 (正前方)
+    const maxDist = 2500; // 2.5m 最大半徑
+    const r = Math.min(1, pt.dist / maxDist) * (w / 2);
+    const px = cx + r * Math.cos(rad);
+    const py = cy + r * Math.sin(rad);
+    ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
+  }
+
+  // 畫中心機身指示
+  ctx.fillStyle = '#d6382c';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+  ctx.fill();
+}
+drawRadar();
 
 const logEl = $('log');
 function log(kind, text) {
@@ -196,27 +247,15 @@ function log(kind, text) {
 }
 $('btnClear').onclick = () => { logEl.textContent = ''; };
 
-function describeTx(b) {
-  const t = b[2], p = b.slice(6, 6 + b[3]);
-  if (t === 0x04) return 'Request ' + (NAMES[p[0]] || '0x' + p[0].toString(16));
-  if (t === 0x10) return 'Control r/p/y/t = ' + Array.from(p, sgn).join(', ');
-  if (t === 0x11) {
-    if (p[0] === 0x01) return 'Command Stop（緊急停止）';
-    if (p[0] === 0x07) return 'Command FlightEvent ' + (p[1] === 0x11 ? '起飛' : p[1] === 0x12 ? '降落' : '0x' + p[1].toString(16));
-  }
-  return '';
-}
-
 function send(bytes) {
   if (!writer) return Promise.resolve();
-  if (!(bytes[2] === 0x04 && $('hidePoll').checked)) log('tx', 'TX  ' + hex(bytes) + '   ' + describeTx(bytes));
-  wq = wq.then(() => writer.write(bytes)).catch(e => { log('err', '寫入失敗：' + e.message); });
-  return wq;
+  return writer.write(bytes).catch(e => { log('err', '寫入失敗：' + e.message); });
 }
 const poll = t => send(P.req(t));
 
 function i16(data) { const v = new DataView(Uint8Array.from(data).buffer); return n => v.getInt16(n * 2, true); }
 const hits = {};
+
 function onFrame(f) {
   (hits[f.type] = hits[f.type] || []).push(performance.now());
   const polled = [T_STATE, T_RANGE, T_MOTION, T_RAW, T_POS, T_JOY].includes(f.type);
@@ -228,36 +267,30 @@ function onFrame(f) {
     $('bat').textContent = st.battery + ' %';
     $('mode').textContent = FLIGHT[st.flight] || '0x' + st.flight.toString(16);
     $('bat').classList.remove('stale'); $('mode').classList.remove('stale');
-    note = '電池 ' + st.battery + '%，飛行模式 0x' + st.flight.toString(16);
   } else if (f.type === T_RANGE && f.data.length === 12) {
     const getS16 = i16(f.data);
-    const front = getS16(1); // offset 2 -> index 1
-    const bottom = getS16(5); // offset 10 -> index 5
+    st.front = getS16(1); // front mm
+    const bottom = getS16(5); // bottom mm
     
     twin.bottom(bottom);
-    $('frontDist').textContent = front > 0 ? (front / 10).toFixed(1) + ' cm' : '—';
-    $('frontDist').classList.toggle('stale', !(front > 0));
-    
+    $('frontDist').textContent = st.front > 0 ? (st.front / 10).toFixed(1) + ' cm' : '—';
+    $('frontDist').classList.toggle('stale', !(st.front > 0));
     $('alt').textContent = bottom > 0 ? (bottom / 10).toFixed(1) + ' cm' : '—';
     $('alt').classList.toggle('stale', !(bottom > 0));
-    note = 'front = ' + front + ' mm, bottom = ' + bottom + ' mm';
+
+    // 如果開啟掃描，記錄當前 Yaw 與 Front 距離
+    if ($('enableScan').checked && st.front > 0) {
+      radarPoints.push({ yaw: st.yaw, dist: st.front });
+      if (radarPoints.length > 500) radarPoints.shift(); // 限制最多 500 點
+      drawRadar();
+    }
+    note = 'front = ' + st.front + ' mm';
   } else if (f.type === T_MOTION && f.data.length === 18) {
     const g = i16(f.data);
-    twin.att(g(6), g(7), g(8));
-    setImu('ax', g(0) / 10); setImu('ay', g(1) / 10); setImu('az', g(2) / 10);
-    setImu('gr', g(3)); setImu('gp', g(4)); setImu('gy', g(5));
-    setImu('ar', g(6)); setImu('ap', g(7)); setImu('ayaw', g(8));
-    note = 'accel ' + [g(0), g(1), g(2)].join(',');
-  } else if (f.type === T_JOY && f.data.length === 8) {
-    const d = f.data;
-    note = '搖桿 左(' + sgn(d[0]) + ',' + sgn(d[1]) + ') 右(' + sgn(d[4]) + ',' + sgn(d[5]) + ')';
-  } else if (f.type === T_POS && f.data.length === 12) {
-    const v = new DataView(Uint8Array.from(f.data).buffer);
-    const x = v.getFloat32(0, true), y = v.getFloat32(4, true), z = v.getFloat32(8, true);
-    twin.pos(x, y, z);
-    note = 'x ' + x.toFixed(3) + ' y ' + y.toFixed(3) + ' z ' + z.toFixed(3) + ' m';
+    st.yaw = g(8); // angleYaw
+    twin.att(g(6), g(7), st.yaw);
+    note = 'yaw = ' + st.yaw + '°';
   } else {
-    log('rx', 'RX  ' + hex(f.raw) + '   （type 0x' + f.type.toString(16) + '）');
     return;
   }
   if (!(polled && $('hidePoll').checked)) log('rx', 'RX  ' + hex(f.raw) + '   ' + NAMES[f.type] + '：' + note);
@@ -278,38 +311,10 @@ async function readLoop() {
 async function pollLoop() {
   let i = 0;
   while (connected) {
-    const imu = $('imuOn').checked;
-    const seq = imu ? [T_MOTION, T_RANGE, T_MOTION, T_RANGE, T_STATE, T_POS, T_RAW] : [T_STATE, T_RANGE];
+    const seq = [T_MOTION, T_RANGE, T_STATE];
     poll(seq[i++ % seq.length]);
-    await sleep(imu ? 40 : 250);
+    await sleep(40);
   }
-}
-
-// IMU 面板
-const IMU_ROWS = [
-  ['加速度', 20, 'm/s²', [['ax', 'X'], ['ay', 'Y'], ['az', 'Z']]],
-  ['角速度', 360, '°/s', [['gr', 'Roll'], ['gp', 'Pitch'], ['gy', 'Yaw']]],
-  ['姿態角', 180, '°', [['ar', 'Roll'], ['ap', 'Pitch'], ['ayaw', 'Yaw']]]
-];
-const imuScale = {};
-for (const [title, scale, unit, rows] of IMU_ROWS) {
-  const g = document.createElement('div'); g.className = 'g'; g.textContent = title + '（' + unit + '）';
-  $('imu').appendChild(g);
-  for (const [id, label] of rows) {
-    imuScale[id] = scale;
-    const l = document.createElement('span'); l.textContent = label;
-    const bar = document.createElement('div'); bar.className = 'bar'; bar.innerHTML = '<i id="b_' + id + '"></i>';
-    const v = document.createElement('span'); v.className = 'v stale'; v.id = 'v_' + id; v.textContent = '—';
-    $('imu').append(l, bar, v);
-  }
-}
-function setImu(id, val) {
-  const v = $('v_' + id);
-  v.textContent = val.toFixed(1); v.classList.remove('stale');
-  const r = Math.max(-1, Math.min(1, val / imuScale[id])) * 50;
-  const b = $('b_' + id);
-  b.style.left = (r >= 0 ? 50 : 50 + r) + '%';
-  b.style.width = Math.abs(r) + '%';
 }
 
 function initTwin() {
@@ -330,11 +335,9 @@ function initTwin() {
 
   const drone = new THREE.Group(); drone.rotation.order = 'YXZ'; drone.scale.setScalar(0.28);
   const model = new THREE.Group(); drone.add(model);
-  const mat = (color, extra) => new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.65, metalness: 0.05 }, extra));
-  const dark = mat(0x2a2f31), darker = mat(0x1a1d1f), red = mat(0xd6382c), rear = mat(0x4a5256);
-  const led = mat(0x1d3a2a, { emissive: 0x3ddc84, emissiveIntensity: 1.1, transparent: true });
-  
-  model.add(new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.16, 0.86), dark));
+  const mat = color => new THREE.MeshStandardMaterial({ color, roughness: 0.65, metalness: 0.05 });
+  model.add(new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.16, 0.86), mat(0x2a2f31)));
+
   const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 50);
   const V0 = { th: 0.7, ph: 1.05, dist: 3.2 }; let v = Object.assign({}, V0);
   const target = new THREE.Vector3(0, 0.4, 0);
@@ -373,11 +376,11 @@ function initTwin() {
   return {
     att: (r, p, y) => { d.att = { t: performance.now(), r, p, y }; },
     bottom: mm => { d.bottom = { t: performance.now(), mm }; },
-    pos: (x, y, z) => { d.pos = { t: performance.now(), x, y, z }; },
+    pos: (x, y, z) => {},
     flight: fl => { d.flight = { t: performance.now(), v: fl }; },
     zeroYaw: () => { if (d.att) d.yawZero = d.att.y; },
     clearTrail: () => {},
-    reset: () => { d.att = d.bottom = d.pos = d.flight = null; d.yawZero = 0; }
+    reset: () => { d.att = d.bottom = null; d.yawZero = 0; }
   };
 }
 const twin = initTwin();
@@ -386,7 +389,7 @@ $('twinClear').onclick = () => twin.clearTrail();
 
 function setUi() {
   $('conn').textContent = connected ? '已連線' : '未連線';
-  $('conn').classList.toggle('on', connected);
+  $('conn'].classList.toggle('on', connected);
   $('btnConnect').disabled = connected;
   $('btnDisc').disabled = !connected;
   $('estop').disabled = !connected;
