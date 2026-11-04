@@ -1,4 +1,4 @@
-// drone-protocol.js : CoDrone EDU 完整通訊協定解析與編包核心
+// drone-protocol.js : CoDrone EDU 通訊協定解析與編包核心（支援 0x41 Attitude 與 0x44 Motion 姿態解析）
 export class DroneProtocolParser {
     constructor(onDataCallback) {
         this.buffer = [];
@@ -69,22 +69,33 @@ export class DroneProtocolParser {
     }
 
     handlePacket(dataType, payload) {
+        // 1. 飛行狀態與電池 (0x40)
         if (dataType === 0x40 && payload.length >= 8) {
             let flightState = payload[1];
             let battery = payload[7];
             this.onDataCallback('state', { battery, flightState });
         }
+        // 2. 距離感測器 / 高度 (0x45)
         else if (dataType === 0x45 && payload.length >= 12) {
             const dataView = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
             let bottomMm = dataView.getInt16(10, true);
             let heightCm = bottomMm / 10.0;
             this.onDataCallback('range', { bottomMm, heightCm });
         }
-        else if ((dataType === 0x30 || dataType === 0x71) && payload.length >= 6) {
+        // 3. 姿態資料 Attitude (0x41, 6 bytes: roll, pitch, yaw)
+        else if (dataType === 0x41 && payload.length >= 6) {
             const dataView = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
             let roll = dataView.getInt16(0, true) / 100.0;
             let pitch = dataView.getInt16(2, true) / 100.0;
             let yaw = dataView.getInt16(4, true) / 100.0;
+            this.onDataCallback('motion', { roll, pitch, yaw });
+        }
+        // 4. 處理過的 IMU 運動資料 Motion (0x44, 18 bytes: 包含 angleRoll/Pitch/Yaw 在 offset 12, 14, 16)
+        else if (dataType === 0x44 && payload.length >= 18) {
+            const dataView = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+            let roll = dataView.getInt16(12, true) / 100.0;
+            let pitch = dataView.getInt16(14, true) / 100.0;
+            let yaw = dataView.getInt16(16, true) / 100.0;
             this.onDataCallback('motion', { roll, pitch, yaw });
         }
     }
@@ -121,8 +132,14 @@ export class DroneProtocolParser {
         return this.buildPacket(0x04, new Uint8Array([0x45]));
     }
 
-    static createRequestSensorPacket() {
-        return this.buildPacket(0x04, new Uint8Array([0x30]));
+    // 請求輕量姿態 Attitude (0x41)
+    static createRequestAttitudePacket() {
+        return this.buildPacket(0x04, new Uint8Array([0x41]));
+    }
+
+    // 請求完整運動資訊 Motion (0x44)
+    static createRequestMotionPacket() {
+        return this.buildPacket(0x04, new Uint8Array([0x44]));
     }
 
     static createTakeoffPacket() {
