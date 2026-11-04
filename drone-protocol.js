@@ -1,4 +1,4 @@
-// drone-protocol.js : CoDrone EDU 通訊協定解析與編包核心（含全封包透視）
+// drone-protocol.js : CoDrone EDU 完整通訊協定解析與編包核心
 export class DroneProtocolParser {
     constructor(onDataCallback) {
         this.buffer = [];
@@ -6,11 +6,7 @@ export class DroneProtocolParser {
         this.selftest();
     }
 
-    // 依據官方測試向量進行自我檢驗
     selftest() {
-        const reqState = DroneProtocolParser.createRequestStatePacket();
-        console.log("[Selftest] Request State 封包長度:", reqState.length);
-        
         const testStrBytes = new TextEncoder().encode("123456789");
         if (DroneProtocolParser.crc16(testStrBytes) === 0x31C3) {
             console.log("[Selftest] CRC16-XMODEM 演算法驗證通過！");
@@ -65,10 +61,6 @@ export class DroneProtocolParser {
             if (DroneProtocolParser.crc16(payloadAndHeader) === gotCrc) {
                 let dataType = frame[2];
                 let payload = frame.slice(6, frame.length - 2);
-                
-                // 💡 關鍵透視：將收到的所有有效封包印在主控台上，方便我們觀察硬體回傳了什麼
-                console.log(`[封包透視] 收到 DataType: 0x${dataType.toString(16).toUpperCase()}, 長度: ${payload.length}`);
-
                 this.handlePacket(dataType, payload);
             } else {
                 this.buffer = [frame[1], ...this.buffer];
@@ -77,20 +69,17 @@ export class DroneProtocolParser {
     }
 
     handlePacket(dataType, payload) {
-        // 1. 飛行狀態與電池 (0x40)
         if (dataType === 0x40 && payload.length >= 8) {
             let flightState = payload[1];
             let battery = payload[7];
             this.onDataCallback('state', { battery, flightState });
         }
-        // 2. 距離感測器 / 高度 (0x45)
         else if (dataType === 0x45 && payload.length >= 12) {
             const dataView = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
             let bottomMm = dataView.getInt16(10, true);
             let heightCm = bottomMm / 10.0;
             this.onDataCallback('range', { bottomMm, heightCm });
         }
-        // 3. IMU 姿態資料 (支援 0x30 或 0x71 原始運動封包)
         else if ((dataType === 0x30 || dataType === 0x71) && payload.length >= 6) {
             const dataView = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
             let roll = dataView.getInt16(0, true) / 100.0;
