@@ -193,11 +193,10 @@ function drawRadar() {
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, w, h);
 
-  // 畫同心圓網格 (代表距離，例如 50cm, 100cm, 200cm)
   ctx.strokeStyle = '#225522';
   ctx.lineWidth = 1;
   [0.5, 1.0, 2.0].forEach(m => {
-    const r = (m * 1000 / 2500) * (w / 2); // 假設最大量測 2.5公尺
+    const r = (m * 1000 / 2500) * (w / 2);
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.stroke();
@@ -206,27 +205,23 @@ function drawRadar() {
     ctx.fillText(m + 'm', cx + 4, cy - r + 10);
   });
 
-  // 十字線
   ctx.strokeStyle = '#224422';
   ctx.beginPath();
   ctx.moveTo(0, cy); ctx.lineTo(w, cy);
   ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
   ctx.stroke();
 
-  // 畫出累積的掃描點
   ctx.fillStyle = '#3ddc84';
   for (const pt of radarPoints) {
-    // pt.yaw 為角度，pt.dist 為 mm
     if (pt.dist <= 0) continue;
-    const rad = (pt.yaw - 90) * (Math.PI / 180); // 讓 0 度朝上 (正前方)
-    const maxDist = 2500; // 2.5m 最大半徑
+    const rad = (pt.yaw - 90) * (Math.PI / 180);
+    const maxDist = 2500;
     const r = Math.min(1, pt.dist / maxDist) * (w / 2);
     const px = cx + r * Math.cos(rad);
     const py = cy + r * Math.sin(rad);
     ctx.fillRect(px - 1.5, py - 1.5, 3, 3);
   }
 
-  // 畫中心機身指示
   ctx.fillStyle = '#d6382c';
   ctx.beginPath();
   ctx.arc(cx, cy, 4, 0, Math.PI * 2);
@@ -269,8 +264,8 @@ function onFrame(f) {
     $('bat').classList.remove('stale'); $('mode').classList.remove('stale');
   } else if (f.type === T_RANGE && f.data.length === 12) {
     const getS16 = i16(f.data);
-    st.front = getS16(1); // front mm
-    const bottom = getS16(5); // bottom mm
+    st.front = getS16(1);
+    const bottom = getS16(5);
     
     twin.bottom(bottom);
     $('frontDist').textContent = st.front > 0 ? (st.front / 10).toFixed(1) + ' cm' : '—';
@@ -278,16 +273,15 @@ function onFrame(f) {
     $('alt').textContent = bottom > 0 ? (bottom / 10).toFixed(1) + ' cm' : '—';
     $('alt').classList.toggle('stale', !(bottom > 0));
 
-    // 如果開啟掃描，記錄當前 Yaw 與 Front 距離
     if ($('enableScan').checked && st.front > 0) {
       radarPoints.push({ yaw: st.yaw, dist: st.front });
-      if (radarPoints.length > 500) radarPoints.shift(); // 限制最多 500 點
+      if (radarPoints.length > 500) radarPoints.shift();
       drawRadar();
     }
     note = 'front = ' + st.front + ' mm';
   } else if (f.type === T_MOTION && f.data.length === 18) {
     const g = i16(f.data);
-    st.yaw = g(8); // angleYaw
+    st.yaw = g(8);
     twin.att(g(6), g(7), st.yaw);
     note = 'yaw = ' + st.yaw + '°';
   } else {
@@ -389,7 +383,7 @@ $('twinClear').onclick = () => twin.clearTrail();
 
 function setUi() {
   $('conn').textContent = connected ? '已連線' : '未連線';
-  $('conn'].classList.toggle('on', connected);
+  $('conn').classList.toggle('on', connected); // 💡 已修正此處的括號語法錯誤
   $('btnConnect').disabled = connected;
   $('btnDisc').disabled = !connected;
   $('estop').disabled = !connected;
