@@ -102,8 +102,8 @@ dialog .row{display:flex;gap:10px;justify-content:flex-end}
     <div class="tools" style="margin:8px 0 0">
       <button id="twinYaw">Yaw 歸零</button><button id="twinClear">清除軌跡</button>
       <label><input type="checkbox" id="flipRoll"> Roll 反向</label>
-      <label><input type="checkbox" id="flipPitch" checked> Pitch 反向</label>
-      <label><input type="checkbox" id="flipYaw" checked> Yaw 反向</label>
+      <label><input type="checkbox" id="flipPitch"> Pitch 反向</label>
+      <label><input type="checkbox" id="flipYaw"> Yaw 反向</label>
     </div>
     <p class="note">拖曳旋轉、滾輪縮放、雙擊重設視角。模型放大約 3 倍；姿態、高度、位置都是無人機回報的值，畫面做了平滑，實際取樣約 5 Hz。軸向正負號尚待實機校正，可用上方開關翻轉（拿著無人機傾斜即可對照，不必起飛）。LED 顏色與螺旋槳轉動只代表飛行模式（待命＝綠、起飛/飛行＝青、降落＝琥珀、異常＝紅），不是轉速或 LED 的實際讀值。前方以紅色螺旋槳表示（方向待實機確認）。</p>
   </section>
@@ -403,7 +403,8 @@ function initTwin() {
     const sg = id => ($(id).checked ? -1 : 1);
 
     if (d.att) {
-      eul.set(sg('flipPitch') * d.att.p * rad, -sg('flipYaw') * (d.att.y - d.yawZero) * rad, -sg('flipRoll') * d.att.r * rad);
+      // 💡 已在此處將 Pitch 與 Yaw 的正負號反轉（預設取消原本的負號或加上反向邏輯）
+      eul.set(-sg('flipPitch') * d.att.p * rad, sg('flipYaw') * (d.att.y - d.yawZero) * rad, -sg('flipRoll') * d.att.r * rad);
       tq.setFromEuler(eul);
     } else tq.identity();
     drone.quaternion.slerp(tq, 0.3);
