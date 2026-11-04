@@ -1,8 +1,8 @@
-// app.js : 主程式、Web Serial 連線管理與 3D 數位雙胞胎連動
+// app.js : 主程式與 3D 數位雙胞胎連動
 import { initDigitalTwin } from './digital-twin.js';
 import { DroneProtocolParser } from './drone-protocol.js';
 
-// 初始化 3D 畫面容器
+// 初始化 3D 畫面
 const twin = initDigitalTwin('canvas-container');
 
 let port;
@@ -12,26 +12,21 @@ const connectBtn = document.getElementById('connect-btn');
 const statusText = document.getElementById('status-text');
 const indicator = document.getElementById('connection-indicator');
 
-// 建立通訊解析回呼
 const parser = new DroneProtocolParser((type, data) => {
     if (type === 'state') {
         document.getElementById('val-front-range').textContent = `電池: ${data.battery}%`;
     }
-    else if (type === 'range') {
-        // 可選：若介面上有高度顯示可在此更新
-    }
     else if (type === 'motion') {
-        // 即時更新介面數值
+        // 即時更新介面上的數值顯示
         document.getElementById('val-roll').textContent = data.roll.toFixed(1) + '°';
         document.getElementById('val-pitch').textContent = data.pitch.toFixed(1) + '°';
         document.getElementById('val-yaw').textContent = data.yaw.toFixed(1) + '°';
         
-        // 驅動 3D 數位雙胞胎即時旋轉
+        // 驅動 3D 數位雙胞胎模型同步旋轉
         twin.updatePose(data.roll, data.pitch, data.yaw);
     }
 });
 
-// 點擊連接序列埠 (USB)
 connectBtn.addEventListener('click', async () => {
     try {
         port = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x0483 }] });
@@ -46,23 +41,22 @@ connectBtn.addEventListener('click', async () => {
 
         readSerial();
 
-        // 啟動定時輪詢：每 100ms 同時請求狀態與 IMU 姿態數據
+        // 定期發送狀態與姿態請求，保持通訊與即時 3D 同步
         pollInterval = setInterval(async () => {
             if (port && port.writable) {
                 const writer = port.writable.getWriter();
                 await writer.write(DroneProtocolParser.createRequestStatePacket());
-                await writer.write(DroneProtocolParser.createRequestSensorPacket());
+                await writer.write(DroneProtocolParser.createRequestAttitudePacket());
                 writer.releaseLock();
             }
         }, 100);
 
     } catch (err) {
         console.error("序列埠連線失敗：", err);
-        alert("無法開啟序列埠，請確認硬體已連接並開機。");
+        alert("無法開啟序列埠，請確認硬體連線。");
     }
 });
 
-// 讀取序列埠資料迴圈
 async function readSerial() {
     try {
         while (port.readable) {
@@ -86,20 +80,17 @@ async function readSerial() {
     }
 }
 
-// 發送指令輔助函數
 async function sendCommandPacket(packetUint8) {
     if (!port || !port.writable) return;
     try {
         const writer = port.writable.getWriter();
         await writer.write(packetUint8);
         writer.releaseLock();
-        console.log("已發送指令封包");
     } catch (err) {
         console.error("發送指令失敗:", err);
     }
 }
 
-// 按鈕事件綁定
 document.getElementById('btn-takeoff').addEventListener('click', async () => {
     await sendCommandPacket(DroneProtocolParser.createTakeoffPacket());
 });
