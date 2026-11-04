@@ -1,4 +1,4 @@
-// drone-protocol.js : CoDrone EDU 通訊協定解析與編包核心（支援 0x41 Attitude 與 0x44 Motion 姿態解析）
+// drone-protocol.js : CoDrone EDU 完整通訊協定解析與編包核心（對齊官方 2.11 規格）
 export class DroneProtocolParser {
     constructor(onDataCallback) {
         this.buffer = [];
@@ -82,20 +82,20 @@ export class DroneProtocolParser {
             let heightCm = bottomMm / 10.0;
             this.onDataCallback('range', { bottomMm, heightCm });
         }
-        // 3. 姿態資料 Attitude (0x41, 6 bytes: roll, pitch, yaw)
+        // 3. 姿態角 Attitude (0x41, 6 bytes: roll, pitch, yaw，單位度)
         else if (dataType === 0x41 && payload.length >= 6) {
             const dataView = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-            let roll = dataView.getInt16(0, true) / 100.0;
-            let pitch = dataView.getInt16(2, true) / 100.0;
-            let yaw = dataView.getInt16(4, true) / 100.0;
+            let roll = dataView.getInt16(0, true);
+            let pitch = dataView.getInt16(2, true);
+            let yaw = dataView.getInt16(4, true);
             this.onDataCallback('motion', { roll, pitch, yaw });
         }
-        // 4. 處理過的 IMU 運動資料 Motion (0x44, 18 bytes: 包含 angleRoll/Pitch/Yaw 在 offset 12, 14, 16)
+        // 4. 運動資訊 Motion (0x44, 18 bytes: angleRoll/Pitch/Yaw 在 offset 12, 14, 16)
         else if (dataType === 0x44 && payload.length >= 18) {
             const dataView = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-            let roll = dataView.getInt16(12, true) / 100.0;
-            let pitch = dataView.getInt16(14, true) / 100.0;
-            let yaw = dataView.getInt16(16, true) / 100.0;
+            let roll = dataView.getInt16(12, true);
+            let pitch = dataView.getInt16(14, true);
+            let yaw = dataView.getInt16(16, true);
             this.onDataCallback('motion', { roll, pitch, yaw });
         }
     }
@@ -132,14 +132,9 @@ export class DroneProtocolParser {
         return this.buildPacket(0x04, new Uint8Array([0x45]));
     }
 
-    // 請求輕量姿態 Attitude (0x41)
+    // 請求 Attitude 姿態 (0x41)
     static createRequestAttitudePacket() {
         return this.buildPacket(0x04, new Uint8Array([0x41]));
-    }
-
-    // 請求完整運動資訊 Motion (0x44)
-    static createRequestMotionPacket() {
-        return this.buildPacket(0x04, new Uint8Array([0x44]));
     }
 
     static createTakeoffPacket() {
