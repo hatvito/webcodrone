@@ -83,6 +83,8 @@ function crc16(bytes, crc = 0) {
 * `Altitude`: `0x43` (氣壓計與測距高度)
 * `Motion`: `0x44` (處理後 IMU：加速度、角速度、姿態角)
 * `Range`: `0x45` (紅外線距離感測，含底部測距)
+* `Motor`: `0x60` (四馬達獨立動力輸出：M1~M4, PWM: 0~1000)
+* `MotorSingle`: `0x61` (單顆馬達動力輸出：Target 0~3, PWM: 0~1000)
 * `Joystick`: `0x71` (遙控器實體搖桿輸入)
 
 ### 指令類型 (CommandType)
