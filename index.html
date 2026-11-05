@@ -396,7 +396,7 @@ if (!window.THREE) {
   <div class="header-spacer"></div>
   <div class="header-right">
     <!-- 版本建置流水號 -->
-    <span class="version-badge" title="版本建置流水號">v1.4.0-b20261105.1145</span>
+    <span class="version-badge" title="版本建置流水號">v1.5.0-b20261105.1335</span>
 
     <span id="conn" class="badge">未連線</span>
     <button id="btnConnect" class="primary">連接控制器</button>
@@ -483,18 +483,22 @@ if (!window.THREE) {
     <section class="panel">
       <h2>
         <span>馬達單體測試與轉速動力</span>
-        <button id="btnStopMotors" style="font-size:11px; padding:2px 7px; background:var(--amber); color:#fff; border:none; border-radius:4px;" onclick="stopAllMotorsImmediate()">⏹ 煞停馬達</button>
+        <div style="display:flex; gap:6px;">
+          <button id="btnBeep" style="font-size:11px; padding:2px 7px; background:var(--teal); color:#fff; border:none; border-radius:4px;" onclick="testBuzzer()">🔊 測試嗶聲</button>
+          <button id="btnStopMotors" style="font-size:11px; padding:2px 7px; background:var(--amber); color:#fff; border:none; border-radius:4px;" onclick="stopAllMotorsImmediate()">⏹ 煞停馬達</button>
+        </div>
       </h2>
       <div style="font-size:11px; color:var(--mute); margin-bottom:8px; line-height:1.4;">
-        ⚠️ <strong>轉速說明</strong>：微型空心杯馬達<strong>無硬體編碼器，無法讀取實際 RPM</strong>。但可精確控制各馬達動力輸出（PWM: 0~1000）。測試時請穩固握持無人機。
+        💡 <strong>「煞停馬達」說明</strong>：此按鈕是<strong>切斷/終止馬達動力</strong>（若無人機本來就靜止在桌上，按下保持停轉不會動作）。<br>
+        ⚡ <strong>測試馬達轉動</strong>：請先點選測試動力，再點擊下方各馬達的<strong>「轉動 1 秒」</strong>（採高頻連續串流驅動）。微型馬達無編碼器無法讀取 RPM。測試時請穩固握持。
       </div>
 
       <!-- 動力選擇 -->
       <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:12px;">
         <span>測試動力：</span>
-        <label><input type="radio" name="mPower" value="60"> 60 (微動)</label>
-        <label><input type="radio" name="mPower" value="120" checked> 120 (標準)</label>
-        <label><input type="radio" name="mPower" value="200"> 200 (中速)</label>
+        <label><input type="radio" name="mPower" value="200"> 200 (微轉)</label>
+        <label><input type="radio" name="mPower" value="350" checked> 350 (標準測試)</label>
+        <label><input type="radio" name="mPower" value="500"> 500 (中速動力)</label>
       </div>
 
       <!-- 四馬達佈局 (依實體方位排布) -->
@@ -654,7 +658,7 @@ if (!window.THREE) {
 /* ============================================================
    1. 通訊協定與封包核心 (PROTOCOL Core)
    ============================================================ */
-const APP_VERSION = "v1.4.0-b20261105.1145";
+const APP_VERSION = "v1.5.0-b20261105.1335";
 
 function crc16(bytes, crc = 0) {
   for (const b of bytes) {
@@ -680,6 +684,7 @@ const P = {
   land: () => P.cmd(0x07, 0x12),
   stop: () => P.cmd(0x01, 0x00),
   linkMode: () => P.cmd(0x0A, 0x80, 0x20), // 切換控制器為 Link Mode
+  buzzer: (hz = 1000, ms = 200, to = 0x20) => pkt(0x62, [0x05, hz & 0xFF, (hz >> 8) & 0xFF, ms & 0xFF, (ms >> 8) & 0xFF], to),
   motorSingle: (target, speed) => {
     const s = Math.max(0, Math.min(1000, Math.round(speed)));
     return pkt(0x61, [target & 0xFF, s & 0xFF, (s >> 8) & 0xFF], 0x10);
@@ -1150,7 +1155,7 @@ function setUi() {
   $('estop').disabled = !connected;
   $('btnLand').disabled = !connected;
   $('btnFirst').disabled = $('btnTakeoff').disabled = !connected || busy;
-  document.querySelectorAll('.btn-motor, #btnStopMotors, #btnTestAllMotors, #btnStopMotors2').forEach(b => b.disabled = !connected || busy);
+  document.querySelectorAll('.btn-motor, #btnStopMotors, #btnTestAllMotors, #btnStopMotors2, #btnBeep').forEach(b => b.disabled = !connected || busy);
 }
 
 function resetView() {
@@ -1335,7 +1340,7 @@ async function emergencyStop() {
   if (!connected) return;
   abort = true;
   log('err', '🛑 [緊急停止] 切斷馬達動力！');
-  if (singleMotorTimer) { clearTimeout(singleMotorTimer); singleMotorTimer = null; }
+  stopAllMotorsImmediate(false);
   if (isScriptRunning) stopRunningScript();
   for (let i = 0; i < 3; i++) {
     send(P.motorAll(0, 0, 0, 0));
@@ -1348,29 +1353,39 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !$('dlg').open) emergencyStop();
 });
 
+// 蜂鳴器測試 (Buzzer Test: 測試電腦與控制器通訊)
+async function testBuzzer() {
+  if (!connected) { alert('請先點選「連接控制器」建立連線！'); return; }
+  log('info', '🔊 發送蜂鳴器測試 (1200Hz 200ms)...');
+  await send(P.buzzer(1200, 200, 0x20)); // 控制器蜂鳴器
+  await send(P.buzzer(1200, 200, 0x10)); // 無人機蜂鳴器
+}
+
 // 馬達單體測試與轉速動力控制 (0x60 Motor, 0x61 MotorSingle)
-let singleMotorTimer = null;
+let motorStreamInterval = null;
 
 function getSelectedMotorPower() {
   const sel = document.querySelector('input[name="mPower"]:checked');
-  return sel ? parseInt(sel.value, 10) : 120;
+  return sel ? parseInt(sel.value, 10) : 350;
 }
 
 async function testSingleMotor(target, durationMs = 1000) {
   if (!connected) { alert('請先點選「連接控制器」建立連線！'); return; }
   const power = getSelectedMotorPower();
   const names = ['M1 (前右 FR)', 'M2 (後右 BR)', 'M3 (後左 BL)', 'M4 (前左 FL)'];
-  log('warn', `⚡ 正在測試 ${names[target]}，設定動力 PWM: ${power}，運轉 ${durationMs / 1000} 秒...`);
+  log('warn', `⚡ 正在啟動 ${names[target]}，設定動力 PWM: ${power}，連續串流 ${durationMs / 1000} 秒...`);
   
-  if (singleMotorTimer) clearTimeout(singleMotorTimer);
-  await send(P.motorSingle(target, power));
+  stopAllMotorsImmediate(true);
   
-  singleMotorTimer = setTimeout(async () => {
-    await send(P.motorSingle(target, 0));
-    await send(P.motorAll(0, 0, 0, 0));
-    log('info', `✅ ${names[target]} 測試完成，馬達已停轉。`);
-    singleMotorTimer = null;
-  }, durationMs);
+  const end = Date.now() + durationMs;
+  motorStreamInterval = setInterval(async () => {
+    if (Date.now() >= end || !connected) {
+      stopAllMotorsImmediate(true);
+      log('info', `✅ ${names[target]} 測試完畢，馬達已停轉。`);
+    } else {
+      await send(P.motorSingle(target, power));
+    }
+  }, 40);
 }
 
 async function holdMotor(target) {
@@ -1378,36 +1393,42 @@ async function holdMotor(target) {
   const power = getSelectedMotorPower();
   const names = ['M1 (前右 FR)', 'M2 (後右 BR)', 'M3 (後左 BL)', 'M4 (前左 FL)'];
   log('warn', `▶️ 按住運轉 ${names[target]} (動力: ${power})`);
-  await send(P.motorSingle(target, power));
+  if (motorStreamInterval) clearInterval(motorStreamInterval);
+  motorStreamInterval = setInterval(() => send(P.motorSingle(target, power)), 40);
 }
 
 async function releaseMotor(target) {
   if (!connected) return;
-  await send(P.motorSingle(target, 0));
-  await send(P.motorAll(0, 0, 0, 0));
+  stopAllMotorsImmediate(true);
   log('info', `⏹ 放開停轉馬達。`);
 }
 
 async function testAllMotors(durationMs = 1000) {
   if (!connected) { alert('請先點選「連接控制器」建立連線！'); return; }
   const power = getSelectedMotorPower();
-  log('warn', `⚡ 四馬達同步測試，動力 PWM: ${power}，運轉 ${durationMs / 1000} 秒...`);
+  log('warn', `⚡ 四馬達同步啟動，動力 PWM: ${power}，連續串流 ${durationMs / 1000} 秒...`);
   
-  if (singleMotorTimer) clearTimeout(singleMotorTimer);
-  await send(P.motorAll(power, power, power, power));
+  stopAllMotorsImmediate(true);
   
-  singleMotorTimer = setTimeout(async () => {
-    await send(P.motorAll(0, 0, 0, 0));
-    log('info', `✅ 四馬達測試完成，已全數停轉。`);
-    singleMotorTimer = null;
-  }, durationMs);
+  const end = Date.now() + durationMs;
+  motorStreamInterval = setInterval(async () => {
+    if (Date.now() >= end || !connected) {
+      stopAllMotorsImmediate(true);
+      log('info', `✅ 四馬達測試完成，已全數停轉。`);
+    } else {
+      await send(P.motorAll(power, power, power, power));
+    }
+  }, 40);
 }
 
-async function stopAllMotorsImmediate() {
-  if (singleMotorTimer) { clearTimeout(singleMotorTimer); singleMotorTimer = null; }
+async function stopAllMotorsImmediate(silent = false) {
+  if (motorStreamInterval) { clearInterval(motorStreamInterval); motorStreamInterval = null; }
   await send(P.motorAll(0, 0, 0, 0));
   await send(P.stop());
-  log('err', '🛑 已立即煞停所有馬達！');
+  if (!silent) {
+    try { send(P.buzzer(800, 120, 0x20)); } catch (e) {}
+    log('err', '🛑 [煞停指令已送出] 馬達動力已切斷歸零！(若馬達本就靜止，按下保持停轉)');
+  }
 }
 
 // 手動點動微調 (Jog)
@@ -1428,7 +1449,7 @@ function stopJog() {
    ============================================================ */
 const PRESETS = {
   test_flight: `# 第一次飛行測試安全腳本\n# 動作：起飛 ➔ 懸停 2 秒 ➔ 降落\nprint("開始執行第一次飛行測試...")\ndrone.takeoff()\ndrone.hover(2)\ndrone.land()\nprint("飛行測試圓滿完成！")`,
-  motor_test: `# CoDrone EDU 馬達轉速動力與單體測試\n# 注意：微型有刷空心杯馬達無編碼器，無法讀取實際 RPM，但可控制各馬達輸出動力 (PWM: 0~1000)\n\nprint("⚡ 測試 M1 前右馬達 (PWM: 100)...")\ndrone.send_motor_single(0, 100)\nsleep(1) # 運轉 1 秒\ndrone.send_motor_single(0, 0) # 停轉\nsleep(0.5)\n\nprint("⚡ 測試 M4 前左馬達 (PWM: 100)...")\ndrone.send_motor_single(3, 100)\nsleep(1)\ndrone.send_motor_single(3, 0)\nsleep(0.5)\n\nprint("⚡ 四馬達同時低速自檢 (PWM: 80)...")\ndrone.set_motor_speed(80, 80, 80, 80)\nsleep(1)\n\nprint("🛑 測試完成，停止所有馬達。")\ndrone.stop_motors()`,
+  motor_test: `# CoDrone EDU 馬達轉速動力與單體測試\n# 注意：微型有刷空心杯馬達無編碼器，無法讀取實際 RPM，但可控制各馬達輸出動力 (PWM: 0~1000)\n\nprint("⚡ 測試 M1 前右馬達 (PWM: 350)...")\ndrone.send_motor_single(0, 350)\nsleep(1) # 運轉 1 秒\ndrone.send_motor_single(0, 0) # 停轉\nsleep(0.5)\n\nprint("⚡ 測試 M4 前左馬達 (PWM: 350)...")\ndrone.send_motor_single(3, 350)\nsleep(1)\ndrone.send_motor_single(3, 0)\nsleep(0.5)\n\nprint("⚡ 四馬達同時低速自檢 (PWM: 300)...")\ndrone.set_motor_speed(300, 300, 300, 300)\nsleep(1)\n\nprint("🛑 測試完成，停止所有馬達。")\ndrone.stop_motors()`,
   battery_check: `# 查詢感測器與電池資料\nbat = drone.get_battery()\nh = drone.get_height()\nfront = drone.get_front_distance()\nprint("無人機電池電量:", bat, "%")\nprint("底部測距高度:", h, "cm")\nprint("前方測距障礙:", front, "cm")`,
   step_move: `# 前進測試\ndrone.takeoff()\ndrone.hover(2)\n\n# 以速度 20 前進 1 秒\ndrone.set_pitch(20)\ndrone.move(1)\n\n# 懸停並降落\ndrone.hover(1)\ndrone.land()`
 };
@@ -1472,6 +1493,21 @@ async function executeScript(code) {
   log('info', '▶ 開始執行腳本...');
 
   let cR = 0, cP = 0, cY = 0, cT = 0;
+  let cM = [0, 0, 0, 0], motorLoop = null;
+
+  function updateMotorLoop() {
+    const hasPower = cM.some(v => v > 0);
+    if (hasPower && !motorLoop) {
+      motorLoop = setInterval(() => {
+        if (!connected || abort) { clearInterval(motorLoop); motorLoop = null; return; }
+        send(P.motorAll(cM[0], cM[1], cM[2], cM[3]));
+      }, 40);
+    } else if (!hasPower && motorLoop) {
+      clearInterval(motorLoop);
+      motorLoop = null;
+      send(P.motorAll(0, 0, 0, 0));
+    }
+  }
 
   const drone = {
     takeoff: async () => {
@@ -1493,16 +1529,22 @@ async function executeScript(code) {
     send_motor_single: async (target, speed) => {
       if (abort) throw new Error("腳本已中止");
       log('info', `[腳本] drone.send_motor_single(馬達:${target}, 動力:${speed})`);
-      await send(P.motorSingle(target, speed));
+      cM[target] = Math.max(0, Math.min(1000, Number(speed) || 0));
+      updateMotorLoop();
+      await send(P.motorSingle(target, cM[target]));
     },
     set_motor_speed: async (fr, br, bl, fl) => {
       if (abort) throw new Error("腳本已中止");
       log('info', `[腳本] drone.set_motor_speed(${fr}, ${br}, ${bl}, ${fl})`);
-      await send(P.motorAll(fr, br, bl, fl));
+      cM = [Number(fr) || 0, Number(br) || 0, Number(bl) || 0, Number(fl) || 0].map(v => Math.max(0, Math.min(1000, v)));
+      updateMotorLoop();
+      await send(P.motorAll(cM[0], cM[1], cM[2], cM[3]));
     },
     stop_motors: async () => {
       log('info', '[腳本] drone.stop_motors()');
-      await stopAllMotorsImmediate();
+      cM = [0, 0, 0, 0];
+      updateMotorLoop();
+      await stopAllMotorsImmediate(true);
     },
     set_roll: v => { cR = Number(v) || 0; },
     set_pitch: v => { cP = Number(v) || 0; },
@@ -1560,6 +1602,8 @@ async function executeScript(code) {
   } catch (err) {
     if (!abort) log('err', `❌ 腳本錯誤: ${err.message}`);
   } finally {
+    if (motorLoop) { clearInterval(motorLoop); motorLoop = null; }
+    try { await send(P.motorAll(0, 0, 0, 0)); } catch (e) {}
     isScriptRunning = false;
     $('btnRunScript').disabled = false;
     $('btnStopScript').disabled = true;
