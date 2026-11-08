@@ -396,7 +396,7 @@ if (!window.THREE) {
   <div class="header-spacer"></div>
   <div class="header-right">
     <!-- 版本建置流水號 -->
-    <span class="version-badge" title="版本建置流水號">v1.7.0-b20261108.2145</span>
+    <span class="version-badge" title="版本建置流水號">v1.7.1-b20261108.2235</span>
 
     <span id="conn" class="badge">未連線</span>
     <button id="btnConnect" class="primary">連接控制器</button>
@@ -632,7 +632,7 @@ if (!window.THREE) {
         </div>
       </div>
       <div id="simModeNotice" style="display:none; font-size:11px; padding:5px 8px; margin-bottom:8px; background:rgba(52, 211, 153, 0.1); border:1px solid var(--teal); border-radius:4px; color:var(--teal);">
-        💡 <b>純數位雙生模擬模式已啟用</b>：無需連接控制器或實體無人機！所有動作（起飛、懸停、航向位移、360° 虛擬障礙物掃描）將 100% 在 3D 視窗與 2D 雷達模擬呈現，零墜機風險。
+        💡 <b>純數位雙生模擬模式</b>：按下「執行」將直接在 3D 雙生視窗中流暢模擬，<b>實體無人機完全隔離不動作、不跳確認彈窗</b>，零墜機風險。
       </div>
 
       <div class="editor-box">
@@ -681,7 +681,7 @@ if (!window.THREE) {
 /* ============================================================
    1. 通訊協定與封包核心 (PROTOCOL Core)
    ============================================================ */
-const APP_VERSION = "v1.7.0-b20261108.2145";
+const APP_VERSION = "v1.7.1-b20261108.2235";
 
 function crc16(bytes, crc = 0) {
   for (const b of bytes) {
@@ -800,6 +800,13 @@ function log(kind, text) {
 $('btnClear').onclick = () => { logEl.textContent = ''; };
 
 function send(bytes) {
+  // 【硬體防護鎖】模擬運行中或純模擬模式下，全面切斷對實體機的指令發送！
+  if (typeof isSimRunning !== 'undefined' && isSimRunning) {
+    return Promise.resolve();
+  }
+  if (typeof getExecMode === 'function' && getExecMode() === 'sim' && bytes[2] !== 0x04) {
+    return Promise.resolve();
+  }
   if (!writer) return Promise.resolve();
   if (!(bytes[2] === 0x04 && $('hidePoll').checked)) {
     log('tx', 'TX  ' + hex(bytes));
@@ -1335,6 +1342,10 @@ async function prepare() {
 }
 
 async function doTakeoff() {
+  if (typeof getExecMode === 'function' && getExecMode() === 'sim') {
+    log('warn', '🛑 [硬體隔離防護] 當前為純數位雙生模擬模式，已攔截實機起飛指令！');
+    return false;
+  }
   await prepare();
   const t0 = performance.now();
   while (!abort && performance.now() - t0 < 4000 && st.flight !== 0x12 && st.flight !== 0x13) {
@@ -1357,6 +1368,9 @@ async function doHover(ms) {
 }
 
 async function doLand() {
+  if (typeof getExecMode === 'function' && getExecMode() === 'sim') {
+    return false;
+  }
   hover();
   const t0 = performance.now();
   while (!abort && performance.now() - t0 < 4000 && st.flight !== 0x14 && st.flight !== 0x10) {
@@ -1416,6 +1430,10 @@ $('btnLand').onclick = async () => {
 };
 
 async function doScan360(yawSpeed = 25) {
+  if (typeof getExecMode === 'function' && getExecMode() === 'sim') {
+    log('warn', '🛑 [硬體隔離防護] 當前為純數位雙生模擬模式，已攔截實機 360° 掃描指令！');
+    return false;
+  }
   const btn = $('btnScan360');
   const origBtnText = btn ? btn.textContent : '🌀 起飛自轉 360° 描繪障礙物';
   try {
@@ -1635,7 +1653,7 @@ function updateExecModeUI() {
   const notice = $('simModeNotice');
   if (notice) notice.style.display = isSim ? 'block' : 'none';
   const btn = $('btnRunScript');
-  if (btn) btn.textContent = isSim ? '▶ 執行數位雙生模擬' : '▶ 執行實機腳本';
+  if (btn) btn.textContent = isSim ? '▶ 啟動數位雙生模擬 (直接執行)' : '▶ 執行實機腳本 (安全飛行)';
   if (isSim && !connected && simDrone.flight === 0x10) {
     simUpdateTwin();
   }
@@ -1749,7 +1767,7 @@ async function confirmAndRunScript() {
   const isSim = getExecMode() === 'sim';
 
   if (!isSim && !connected) {
-    alert("請先連線控制器！若想在電腦桌面免硬體測試，可切換為「純數位雙生模擬機」模式。");
+    alert("請先連接實體控制器！若要在桌面免硬體測試，請切換至「純數位雙生模擬機」模式。");
     return;
   }
 
@@ -1757,24 +1775,23 @@ async function confirmAndRunScript() {
   if (!code) { alert("腳本為空！"); return; }
 
   if (isSim) {
-    const ok = await confirmDialog("🎮 啟動純數位雙生虛擬模擬飛行", [
-      "【桌面純模擬模式】實體無人機不會動作，無螺旋槳轉動風險。",
-      "3D 數位雙生與 2D 雷達將即時模擬飛行物理動力、姿態傾角與障礙物點雲測繪。",
-      "隨時可點擊「⏹ 中斷」或按鍵盤 Esc 停止模擬。"
-    ], code);
-    if (!ok) { log('info', '已取消模擬執行。'); return; }
-  } else {
-    if (code.includes("takeoff") || code.includes("move") || code.includes("set_pitch") || code.includes("motor") || code.includes("scan_360")) {
-      const ok = await confirmDialog("🛰️ 即將執行實機飛行腳本，請確認環境安全！", [
-        `目前電池: ${st.battery}%，飛行狀態「${FLIGHT[st.flight] || st.flight}」。`,
-        code.includes("motor") ? "包含馬達直接動力控制（請確保無人機擺放平穩）" : "周圍 1.5 公尺內無人員或障礙物",
-        "隨時可按 Esc 觸發緊急停止"
-      ], code);
-      if (!ok) { log('info', '已取消執行實機腳本。'); return; }
-    }
+    // 🎮 純數位雙生模擬模式：零彈窗、零干擾，直接流暢在 3D 視窗中模擬！
+    log('info', '🎮 [純數位雙生模擬] 啟動模擬飛行（實體無人機完全隔離，不動作）');
+    executeScript(code, true);
+    return;
   }
 
-  executeScript(code, isSim);
+  // 🛰️ 實機模式：才跳出安全確認對話框
+  if (code.includes("takeoff") || code.includes("move") || code.includes("set_pitch") || code.includes("motor") || code.includes("scan_360")) {
+    const ok = await confirmDialog("🛰️ 即將執行實機飛行腳本，請確認環境安全！", [
+      `目前電池: ${st.battery}%，飛行狀態「${FLIGHT[st.flight] || st.flight}」。`,
+      code.includes("motor") ? "包含馬達直接動力控制（請確保無人機擺放平穩）" : "周圍 1.5 公尺內無人員或障礙物",
+      "隨時可按 Esc 觸發緊急停止"
+    ], code);
+    if (!ok) { log('info', '已取消執行實機腳本。'); return; }
+  }
+
+  executeScript(code, false);
 }
 
 function stopRunningScript() {
@@ -1794,6 +1811,8 @@ function stopRunningScript() {
 }
 
 async function executeScript(code, isSim = false) {
+  // 強制以當前選取的執行模式防護
+  isSim = isSim || (getExecMode() === 'sim');
   isScriptRunning = true;
   isSimRunning = isSim;
   abort = false;
