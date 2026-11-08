@@ -396,7 +396,7 @@ if (!window.THREE) {
   <div class="header-spacer"></div>
   <div class="header-right">
     <!-- 版本建置流水號 -->
-    <span class="version-badge" title="版本建置流水號">v1.6.0-b20261108.1650</span>
+    <span class="version-badge" title="版本建置流水號">v1.7.0-b20261108.2145</span>
 
     <span id="conn" class="badge">未連線</span>
     <button id="btnConnect" class="primary">連接控制器</button>
@@ -617,13 +617,31 @@ if (!window.THREE) {
         </select>
       </h2>
 
+            <!-- 執行目標模式切換 (實機 + 數位雙生 vs 純數位雙生模擬機) -->
+      <div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; padding:6px 10px; background:var(--bg-sub); border:1px solid var(--line); border-radius:6px;">
+        <span style="font-size:12px; font-weight:700; color:var(--text);">執行目標模式：</span>
+        <div style="display:flex; gap:12px; font-size:12px;">
+          <label style="display:inline-flex; align-items:center; gap:5px; cursor:pointer;" title="需透過 USB 連接控制器，指令發射至 CoDrone EDU 實機，數位雙生鏡像實機數據">
+            <input type="radio" name="execMode" value="hybrid" checked onchange="updateExecModeUI()">
+            <span>🛰️ 實機 + 數位雙生 <small style="color:var(--mute);">(需連線)</small></span>
+          </label>
+          <label style="display:inline-flex; align-items:center; gap:5px; cursor:pointer;" title="免接控制器或實機！100% 在 3D 數位雙生與 2D 雷達模擬飛行物理與障礙物探測">
+            <input type="radio" name="execMode" value="sim" onchange="updateExecModeUI()">
+            <span style="color:var(--teal); font-weight:700;">🎮 純數位雙生模擬機 <small style="color:var(--teal);">(免硬體/桌面模擬)</small></span>
+          </label>
+        </div>
+      </div>
+      <div id="simModeNotice" style="display:none; font-size:11px; padding:5px 8px; margin-bottom:8px; background:rgba(52, 211, 153, 0.1); border:1px solid var(--teal); border-radius:4px; color:var(--teal);">
+        💡 <b>純數位雙生模擬模式已啟用</b>：無需連接控制器或實體無人機！所有動作（起飛、懸停、航向位移、360° 虛擬障礙物掃描）將 100% 在 3D 視窗與 2D 雷達模擬呈現，零墜機風險。
+      </div>
+
       <div class="editor-box">
         <textarea id="codeEditor" spellcheck="false"></textarea>
       </div>
 
       <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
         <div style="font-size:11px; color:var(--mute);">
-          支援指令: <code style="color:var(--teal);">drone.takeoff()</code>, <code style="color:var(--teal);">drone.hover(sec)</code>, <code style="color:var(--teal);">drone.land()</code>, <code style="color:var(--teal);">drone.move(sec)</code>
+          支援指令: <code style="color:var(--teal);">drone.takeoff()</code>, <code style="color:var(--teal);">drone.hover(sec)</code>, <code style="color:var(--teal);">drone.scan_360()</code>, <code style="color:var(--teal);">drone.move(sec)</code>, <code style="color:var(--teal);">drone.land()</code>
         </div>
         <div style="display:flex; gap:6px;">
           <button id="btnStopScript" onclick="stopRunningScript()" disabled>⏹ 中斷</button>
@@ -663,7 +681,7 @@ if (!window.THREE) {
 /* ============================================================
    1. 通訊協定與封包核心 (PROTOCOL Core)
    ============================================================ */
-const APP_VERSION = "v1.6.0-b20261108.1650";
+const APP_VERSION = "v1.7.0-b20261108.2145";
 
 function crc16(bytes, crc = 0) {
   for (const b of bytes) {
@@ -827,10 +845,12 @@ function drawRadar() {
   rCtx.moveTo(cx, 0); rCtx.lineTo(cx, h);
   rCtx.stroke();
 
-  // 即時探測掃描線 (當前機頭朝向)
-  if (connected) {
-    const curRad = (st.yaw - 90) * (Math.PI / 180);
-    rCtx.strokeStyle = 'rgba(52, 211, 153, 0.45)';
+  // 即時探測掃描線 (當前機頭朝向：實機或模擬機)
+  const isSim = typeof getExecMode === 'function' && getExecMode() === 'sim';
+  if (connected || isSim) {
+    const heading = isSim && typeof simDrone !== 'undefined' ? simDrone.yaw : st.yaw;
+    const curRad = (heading - 90) * (Math.PI / 180);
+    rCtx.strokeStyle = isSim ? 'rgba(56, 189, 248, 0.75)' : 'rgba(52, 211, 153, 0.45)';
     rCtx.lineWidth = 1.5;
     rCtx.beginPath();
     rCtx.moveTo(cx, cy);
@@ -1106,8 +1126,9 @@ function initTwin() {
   function frame() {
     requestAnimationFrame(frame);
     const now = performance.now();
-    const live = connected && d.flight && now - d.flight.t < 1500;
-    const attOk = d.att && now - d.att.t < 1000;
+    const isSim = typeof getExecMode === 'function' && getExecMode() === 'sim';
+    const live = (connected && d.flight && now - d.flight.t < 1500) || isSim;
+    const attOk = (d.att && now - d.att.t < 1000) || isSim;
     const sg = id => ($(id).checked ? -1 : 1);
 
     if (d.att) {
@@ -1143,9 +1164,14 @@ function initTwin() {
     if (now - lastOv > 150) {
       lastOv = now;
       const L = [];
-      if (!connected) L.push('未連線');
-      else if (!live) L.push('等待無人機即時狀態中...');
-      L.push(d.att ? `姿態  Roll ${d.att.r}°  Pitch ${d.att.p}°  Yaw ${d.att.y - d.yawZero}°` : '姿態  —');
+      if (isSim) {
+        L.push(typeof isSimRunning !== 'undefined' && isSimRunning ? '🎮 [純數位雙生模擬飛行中]' : '🎮 [數位雙生模擬機 - 待命]');
+      } else if (!connected) {
+        L.push('未連線');
+      } else if (!live) {
+        L.push('等待無人機即時狀態中...');
+      }
+      L.push(d.att ? `姿態  Roll ${d.att.r.toFixed(1)}°  Pitch ${d.att.p.toFixed(1)}°  Yaw ${(d.att.y - d.yawZero).toFixed(1)}°` : '姿態  —');
       L.push(d.bottom && d.bottom.mm > 0 ? `高度  ${(d.bottom.mm / 10).toFixed(1)} cm` : '高度  —');
       L.push(d.pos ? `位置  x ${d.pos.x.toFixed(2)}  y ${d.pos.y.toFixed(2)} m` : '位置  —');
       ov.textContent = L.join('\n');
@@ -1196,14 +1222,20 @@ setInterval(() => {
    8. 連線控制 (Web Serial Connect / Disconnect)
    ============================================================ */
 function setUi() {
-  $('conn').textContent = connected ? '已連線' : '未連線';
-  $('conn').classList.toggle('on', connected);
+  const isSim = typeof getExecMode === 'function' && getExecMode() === 'sim';
+  const simActive = typeof isSimRunning !== 'undefined' && isSimRunning;
+  $('conn').textContent = connected ? '已連線' : (isSim ? '純模擬模式' : '未連線');
+  $('conn').classList.toggle('on', connected || isSim);
   $('btnConnect').disabled = connected;
   $('btnDisc').disabled = !connected;
-  $('estop').disabled = !connected;
-  $('btnLand').disabled = !connected;
-  $('btnFirst').disabled = $('btnTakeoff').disabled = $('btnScan360').disabled = !connected || busy;
-  document.querySelectorAll('.btn-motor, #btnStopMotors, #btnTestAllMotors, #btnStopMotors2, #btnBeep').forEach(b => b.disabled = !connected || busy);
+  $('estop').disabled = !connected && !simActive;
+  $('btnLand').disabled = !connected && !simActive;
+  $('btnFirst').disabled = $('btnTakeoff').disabled = $('btnScan360').disabled = !connected || busy || simActive;
+  document.querySelectorAll('.btn-motor, #btnStopMotors, #btnTestAllMotors, #btnStopMotors2, #btnBeep').forEach(b => b.disabled = !connected || busy || simActive);
+
+  if ($('btnRunScript')) {
+    $('btnRunScript').disabled = busy || (typeof isScriptRunning !== 'undefined' && isScriptRunning) || (!connected && !isSim);
+  }
 }
 
 function resetView() {
@@ -1459,6 +1491,17 @@ $('btnScan360').onclick = async () => {
 
 // 緊急停止
 async function emergencyStop() {
+  const isSim = typeof getExecMode === 'function' && getExecMode() === 'sim';
+  if (isSim && typeof isSimRunning !== 'undefined' && isSimRunning) {
+    log('err', '🛑 🎮 [模擬 E-Stop] 緊急切斷虛擬動力！');
+    if (typeof stopRunningScript === 'function') stopRunningScript();
+    if (typeof simDrone !== 'undefined') {
+      simDrone.y = 0;
+      simDrone.flight = 0x10;
+      simUpdateTwin();
+    }
+    return;
+  }
   if (!connected) return;
   abort = true;
   log('err', '🛑 [緊急停止] 切斷馬達動力！');
@@ -1567,14 +1610,134 @@ function stopJog() {
 }
 
 /* ============================================================
-   10. Python 風格腳本直譯器 (Python Script Runner)
+   10. 數位雙生模擬引擎與 Python 腳本直譯器 (Dual Mode Engine)
    ============================================================ */
+let isSimRunning = false;
+const simDrone = {
+  x: 0,       // 3D 空間 X (公尺)
+  y: 0,       // 3D 空間 Y (高度，公尺)
+  z: 0,       // 3D 空間 Z (公尺)
+  roll: 0,    // 橫滾角 (度)
+  pitch: 0,   // 俯仰角 (度)
+  yaw: 0,     // 航向角 (度)
+  battery: 98,// 模擬電池百分比
+  flight: 0x10, // 0x10=Ready, 0x12=Takeoff, 0x13=Flight, 0x14=Landing
+  front: 1200 // 前方測距 (mm)
+};
+
+function getExecMode() {
+  const r = document.querySelector('input[name="execMode"]:checked');
+  return r ? r.value : 'hybrid';
+}
+
+function updateExecModeUI() {
+  const isSim = getExecMode() === 'sim';
+  const notice = $('simModeNotice');
+  if (notice) notice.style.display = isSim ? 'block' : 'none';
+  const btn = $('btnRunScript');
+  if (btn) btn.textContent = isSim ? '▶ 執行數位雙生模擬' : '▶ 執行實機腳本';
+  if (isSim && !connected && simDrone.flight === 0x10) {
+    simUpdateTwin();
+  }
+  setUi();
+}
+
+function simUpdateTwin() {
+  if (twin) {
+    twin.att(simDrone.roll, simDrone.pitch, simDrone.yaw);
+    twin.bottom(Math.round(simDrone.y * 1000));
+    twin.pos(-simDrone.z, -simDrone.x, simDrone.y);
+    twin.flight(simDrone.flight);
+  }
+
+  if (!connected) {
+    $('bat').textContent = Math.round(simDrone.battery) + '%';
+    $('bat').classList.remove('stale');
+    $('batteryBar').style.width = Math.round(simDrone.battery) + '%';
+    $('batteryBar').style.background = 'var(--teal)';
+
+    $('frontDist').textContent = (simDrone.front / 10).toFixed(1) + ' cm';
+    $('frontDist').classList.remove('stale');
+
+    $('alt').textContent = (simDrone.y * 100).toFixed(1) + ' cm';
+    $('alt').classList.remove('stale');
+
+    $('mode').textContent = FLIGHT[simDrone.flight] || '待命';
+    $('mode').classList.remove('stale');
+
+    setImu('ar', simDrone.roll);
+    setImu('ap', simDrone.pitch);
+    setImu('ayaw', simDrone.yaw);
+  }
+}
+
+// 虛擬環境射線測距 (Raycast 2.4m x 2.4m 房間與柱體/方塊障礙物)
+function simRaycastDistance(x0, z0, yawDeg) {
+  const yawRad = yawDeg * (Math.PI / 180);
+  const dx = Math.sin(yawRad);
+  const dz = -Math.cos(yawRad);
+
+  let minDist = 2.5;
+
+  // 1. 四周牆面 (X: -1.2 ~ 1.2, Z: -1.2 ~ 1.2)
+  if (dx > 1e-4) {
+    const t = (1.2 - x0) / dx;
+    const z = z0 + t * dz;
+    if (t > 0 && z >= -1.2 && z <= 1.2 && t < minDist) minDist = t;
+  } else if (dx < -1e-4) {
+    const t = (-1.2 - x0) / dx;
+    const z = z0 + t * dz;
+    if (t > 0 && z >= -1.2 && z <= 1.2 && t < minDist) minDist = t;
+  }
+
+  if (dz > 1e-4) {
+    const t = (1.2 - z0) / dz;
+    const x = x0 + t * dx;
+    if (t > 0 && x >= -1.2 && x <= 1.2 && t < minDist) minDist = t;
+  } else if (dz < -1e-4) {
+    const t = (-1.2 - z0) / dz;
+    const x = x0 + t * dx;
+    if (t > 0 && x >= -1.2 && x <= 1.2 && t < minDist) minDist = t;
+  }
+
+  // 2. 虛擬障礙物 A (前右方方塊 [0.35, 0.75] x [-0.75, -0.35])
+  const minX = 0.35, maxX = 0.75, minZ = -0.75, maxZ = -0.35;
+  let tmin = -Infinity, tmax = Infinity;
+  if (Math.abs(dx) > 1e-6) {
+    let t1 = (minX - x0) / dx, t2 = (maxX - x0) / dx;
+    if (t1 > t2) [t1, t2] = [t2, t1];
+    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+  }
+  if (Math.abs(dz) > 1e-6) {
+    let t1 = (minZ - z0) / dz, t2 = (maxZ - z0) / dz;
+    if (t1 > t2) [t1, t2] = [t2, t1];
+    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+  }
+  if (tmax >= tmin && tmin > 0 && tmin < minDist) minDist = tmin;
+
+  // 3. 虛擬障礙物 B (後左方圓柱 (cx=-0.5, cz=0.5, r=0.2))
+  const cx = -0.5, cz = 0.5, r = 0.2;
+  const ocx = cx - x0, ocz = cz - z0;
+  const tproj = ocx * dx + ocz * dz;
+  if (tproj > 0) {
+    const d2 = (ocx * ocx + ocz * ocz) - (tproj * tproj);
+    if (d2 < r * r) {
+      const tc = tproj - Math.sqrt(r * r - d2);
+      if (tc > 0 && tc < minDist) minDist = tc;
+    }
+  }
+
+  const noise = (Math.random() - 0.5) * 8;
+  const distMm = Math.round(minDist * 1000 + noise);
+  return Math.max(100, Math.min(2500, distMm));
+}
+
 const PRESETS = {
-  test_flight: `# 第一次飛行測試安全腳本\n# 動作：起飛 ➔ 懸停 2 秒 ➔ 降落\nprint("開始執行第一次飛行測試...")\ndrone.takeoff()\ndrone.hover(2)\ndrone.land()\nprint("飛行測試圓滿完成！")`,
-  scan_360: `# 360° 原地自轉測距障礙物描繪腳本\n# 動作：起飛 ➔ 懸停 ➔ 原地自轉 360° 點雲測繪 ➔ 自動降落\nprint("開始 360 度環景環境測繪任務...")\nprint("目前電池電量:", drone.get_battery(), "%")\ndrone.takeoff()\ndrone.hover(1.5)\n\nprint("開始緩慢自轉掃描周圍障礙物...")\ndrone.scan_360(25)\n\nprint("掃描完畢，懸停並準備降落...")\ndrone.hover(1.5)\ndrone.land()\nprint("任務圓滿完成！請檢視雷達圖與 3D 數位雙生障礙物點雲。")`,
+  test_flight: `# 雙模支援：可在「實機 + 數位雙生」或「純數位雙生模擬機」執行\n# 動作：起飛 ➔ 懸停 2 秒 ➔ 降落\nprint("開始執行飛行測試...")\ndrone.takeoff()\ndrone.hover(2)\ndrone.land()\nprint("飛行測試圓滿完成！")`,
+  scan_360: `# 360° 原地自轉測距障礙物描繪腳本 (實機與模擬機皆支援)\n# 模擬模式下將自轉並以虛擬 ToF 雷射掃描虛擬房間四周與障礙物點雲！\nprint("開始 360 度環景環境測繪任務...")\nprint("目前電池電量:", drone.get_battery(), "%")\ndrone.takeoff()\ndrone.hover(1.5)\n\nprint("開始緩慢自轉掃描周圍障礙物...")\ndrone.scan_360(25)\n\nprint("掃描完畢，懸停並準備降落...")\ndrone.hover(1.5)\ndrone.land()\nprint("任務圓滿完成！請檢視雷達圖與 3D 數位雙生障礙物點雲。")`,
   motor_test: `# CoDrone EDU 馬達轉速動力與單體測試\n# 注意：微型有刷空心杯馬達無編碼器，無法讀取實際 RPM，但可控制各馬達輸出動力 (PWM: 0~1000)\n\nprint("⚡ 測試 M1 前右馬達 (PWM: 350)...")\ndrone.send_motor_single(0, 350)\nsleep(1) # 運轉 1 秒\ndrone.send_motor_single(0, 0) # 停轉\nsleep(0.5)\n\nprint("⚡ 測試 M4 前左馬達 (PWM: 350)...")\ndrone.send_motor_single(3, 350)\nsleep(1)\ndrone.send_motor_single(3, 0)\nsleep(0.5)\n\nprint("⚡ 四馬達同時低速自檢 (PWM: 300)...")\ndrone.set_motor_speed(300, 300, 300, 300)\nsleep(1)\n\nprint("🛑 測試完成，停止所有馬達。")\ndrone.stop_motors()`,
-  battery_check: `# 查詢感測器與電池資料\nbat = drone.get_battery()\nh = drone.get_height()\nfront = drone.get_front_distance()\nprint("無人機電池電量:", bat, "%")\nprint("底部測距高度:", h, "cm")\nprint("前方測距障礙:", front, "cm")`,
-  step_move: `# 前進測試\ndrone.takeoff()\ndrone.hover(2)\n\n# 以速度 20 前進 1 秒\ndrone.set_pitch(20)\ndrone.move(1)\n\n# 懸停並降落\ndrone.hover(1)\ndrone.land()`
+  battery_check: `# 查詢感測器與電池資料 (實機與模擬機皆支援)\nbat = drone.get_battery()\nh = drone.get_height()\nfront = drone.get_front_distance()\natt = drone.get_attitude()\nprint("無人機電池電量:", bat, "%")\nprint("底部測距高度:", h, "cm")\nprint("前方測距障礙:", front, "cm")\nprint("姿態資訊: Roll=" + str(att['roll']) + ", Pitch=" + str(att['pitch']) + ", Yaw=" + str(att['yaw']))`,
+  step_move: `# 前進與平移位移測試 (可於 3D 雙生空間觀察航跡路線)\ndrone.takeoff()\ndrone.hover(1.5)\n\nprint("前方飛行中 (Pitch=20)...")\ndrone.set_pitch(20)\ndrone.move(1)\n\nprint("右方平移中 (Roll=20)...")\ndrone.set_pitch(0)\ndrone.set_roll(20)\ndrone.move(1)\n\ndrone.set_roll(0)\ndrone.hover(1)\ndrone.land()\nprint("飛行任務結束，已繪製航跡於數位雙生中！")`
 };
 
 function loadPreset() {
@@ -1583,42 +1746,66 @@ function loadPreset() {
 }
 
 async function confirmAndRunScript() {
-  if (!connected) { alert("請先連線控制器！"); return; }
+  const isSim = getExecMode() === 'sim';
+
+  if (!isSim && !connected) {
+    alert("請先連線控制器！若想在電腦桌面免硬體測試，可切換為「純數位雙生模擬機」模式。");
+    return;
+  }
+
   const code = $('codeEditor').value.trim();
   if (!code) { alert("腳本為空！"); return; }
 
-  if (code.includes("takeoff") || code.includes("move") || code.includes("set_pitch") || code.includes("motor") || code.includes("scan_360")) {
-    const ok = await confirmDialog("即將執行自訂腳本，請確認環境安全！", [
-      `目前電池: ${st.battery}%`,
-      code.includes("motor") ? "包含馬達直接動力控制（請確保無人機擺放平穩或用手妥善握持）" : "周圍 1.5 公尺內無人員或障礙物",
-      "隨時可按 Esc 觸發緊急停止"
+  if (isSim) {
+    const ok = await confirmDialog("🎮 啟動純數位雙生虛擬模擬飛行", [
+      "【桌面純模擬模式】實體無人機不會動作，無螺旋槳轉動風險。",
+      "3D 數位雙生與 2D 雷達將即時模擬飛行物理動力、姿態傾角與障礙物點雲測繪。",
+      "隨時可點擊「⏹ 中斷」或按鍵盤 Esc 停止模擬。"
     ], code);
-    if (!ok) { log('info', '已取消執行腳本。'); return; }
+    if (!ok) { log('info', '已取消模擬執行。'); return; }
+  } else {
+    if (code.includes("takeoff") || code.includes("move") || code.includes("set_pitch") || code.includes("motor") || code.includes("scan_360")) {
+      const ok = await confirmDialog("🛰️ 即將執行實機飛行腳本，請確認環境安全！", [
+        `目前電池: ${st.battery}%，飛行狀態「${FLIGHT[st.flight] || st.flight}」。`,
+        code.includes("motor") ? "包含馬達直接動力控制（請確保無人機擺放平穩）" : "周圍 1.5 公尺內無人員或障礙物",
+        "隨時可按 Esc 觸發緊急停止"
+      ], code);
+      if (!ok) { log('info', '已取消執行實機腳本。'); return; }
+    }
   }
 
-  executeScript(code);
+  executeScript(code, isSim);
 }
 
 function stopRunningScript() {
   abort = true;
   isScriptRunning = false;
+  isSimRunning = false;
   $('btnRunScript').disabled = false;
   $('btnStopScript').disabled = true;
   log('warn', '腳本已中止。');
-  hover();
+  if (getExecMode() === 'sim') {
+    simDrone.flight = 0x10;
+    simDrone.y = 0;
+    simUpdateTwin();
+  } else if (connected) {
+    hover();
+  }
 }
 
-async function executeScript(code) {
+async function executeScript(code, isSim = false) {
   isScriptRunning = true;
+  isSimRunning = isSim;
   abort = false;
   $('btnRunScript').disabled = true;
   $('btnStopScript').disabled = false;
-  log('info', '▶ 開始執行腳本...');
+  log('info', isSim ? '🎮 [模擬模式] 開始執行純數位雙生腳本...' : '▶ [實機模式] 開始執行腳本...');
 
   let cR = 0, cP = 0, cY = 0, cT = 0;
   let cM = [0, 0, 0, 0], motorLoop = null;
 
   function updateMotorLoop() {
+    if (isSim) return;
     const hasPower = cM.some(v => v > 0);
     if (hasPower && !motorLoop) {
       motorLoop = setInterval(() => {
@@ -1635,44 +1822,154 @@ async function executeScript(code) {
   const drone = {
     takeoff: async () => {
       if (abort) throw new Error("腳本已中止");
-      log('info', '[腳本] drone.takeoff()');
-      await doTakeoff();
+      if (!isSim) {
+        log('info', '[實機] drone.takeoff()');
+        await doTakeoff();
+      } else {
+        log('info', '🎮 [模擬] drone.takeoff() 起飛爬升中...');
+        simDrone.flight = 0x12;
+        const steps = 25;
+        for (let i = 1; i <= steps; i++) {
+          if (abort) throw new Error("腳本已中止");
+          simDrone.y = 0.7 * (i / steps);
+          simDrone.battery = Math.max(10, simDrone.battery - 0.05);
+          simUpdateTwin();
+          await sleep(50);
+        }
+        simDrone.flight = 0x13;
+        simUpdateTwin();
+        log('info', '🎮 [模擬] 起飛完成，定高 0.7m 懸停。');
+      }
     },
     land: async () => {
       if (abort) throw new Error("腳本已中止");
-      log('info', '[腳本] drone.land()');
-      await doLand();
+      if (!isSim) {
+        log('info', '[實機] drone.land()');
+        await doLand();
+      } else {
+        log('info', '🎮 [模擬] drone.land() 降落中...');
+        simDrone.flight = 0x14;
+        const initY = simDrone.y;
+        const steps = 25;
+        for (let i = 1; i <= steps; i++) {
+          if (abort) break;
+          simDrone.y = initY * (1 - i / steps);
+          simUpdateTwin();
+          await sleep(50);
+        }
+        simDrone.y = 0;
+        simDrone.flight = 0x10;
+        simDrone.roll = simDrone.pitch = 0;
+        simUpdateTwin();
+        log('info', '🎮 [模擬] 已安全降落接地。');
+      }
     },
     hover: async (sec = 1) => {
       if (abort) throw new Error("腳本已中止");
-      log('info', `[腳本] drone.hover(${sec}s)`);
-      await doHover(sec * 1000);
+      if (!isSim) {
+        log('info', `[實機] drone.hover(${sec}s)`);
+        await doHover(sec * 1000);
+      } else {
+        log('info', `🎮 [模擬] drone.hover(${sec}s)`);
+        const end = Date.now() + sec * 1000;
+        let wobble = 0;
+        while (Date.now() < end) {
+          if (abort) throw new Error("腳本已中止");
+          wobble += 0.25;
+          simDrone.roll = Math.sin(wobble) * 0.4;
+          simDrone.pitch = Math.cos(wobble * 0.8) * 0.4;
+          simUpdateTwin();
+          await sleep(50);
+        }
+        simDrone.roll = simDrone.pitch = 0;
+        simUpdateTwin();
+      }
     },
     scan_360: async (speed = 25) => {
       if (abort) throw new Error("腳本已中止");
-      log('info', `[腳本] drone.scan_360(速度:${speed})`);
-      await doScan360(speed);
+      if (!isSim) {
+        log('info', `[實機] drone.scan_360(速度:${speed})`);
+        await doScan360(speed);
+      } else {
+        log('info', `🎮 [模擬] drone.scan_360(速度:${speed}) 開始 360° 虛擬自轉測距...`);
+        radarPoints.length = 0;
+        drawRadar();
+        if (twin && twin.clearRadarPoints) twin.clearRadarPoints();
+
+        const targetTurn = 360;
+        let turned = 0;
+        const dt = 0.05;
+        const degPerSec = speed * 2.5;
+
+        while (!abort && turned < targetTurn) {
+          const dDeg = degPerSec * dt;
+          turned += dDeg;
+          simDrone.yaw = (simDrone.yaw + dDeg) % 360;
+          if (simDrone.yaw > 180) simDrone.yaw -= 360;
+
+          const distMm = simRaycastDistance(simDrone.x, simDrone.z, simDrone.yaw);
+          simDrone.front = distMm;
+
+          radarPoints.push({ yaw: simDrone.yaw, dist: distMm });
+          if (radarPoints.length > 800) radarPoints.shift();
+          if (twin && twin.addRadarPoint) twin.addRadarPoint(simDrone.yaw, distMm);
+          drawRadar();
+          simUpdateTwin();
+
+          await sleep(50);
+        }
+        log('info', `🎮 [模擬] 360° 自轉掃描完畢！共採樣 ${radarPoints.length} 個障礙物點。`);
+      }
     },
-    emergency_stop: async () => { await emergencyStop(); },
+    emergency_stop: async () => {
+      if (!isSim) {
+        await emergencyStop();
+      } else {
+        log('err', '🛑 🎮 [模擬] 緊急停止！虛擬動力切斷。');
+        simDrone.y = 0;
+        simDrone.flight = 0x10;
+        simUpdateTwin();
+        abort = true;
+      }
+    },
     send_motor_single: async (target, speed) => {
       if (abort) throw new Error("腳本已中止");
-      log('info', `[腳本] drone.send_motor_single(馬達:${target}, 動力:${speed})`);
-      cM[target] = Math.max(0, Math.min(1000, Number(speed) || 0));
-      updateMotorLoop();
-      await send(P.motorSingle(target, cM[target]));
+      if (!isSim) {
+        log('info', `[實機] drone.send_motor_single(馬達:${target}, 動力:${speed})`);
+        cM[target] = Math.max(0, Math.min(1000, Number(speed) || 0));
+        updateMotorLoop();
+        await send(P.motorSingle(target, cM[target]));
+      } else {
+        log('info', `🎮 [模擬] drone.send_motor_single(馬達:${target}, 動力:${speed})`);
+        simDrone.flight = speed > 0 ? 0x12 : 0x10;
+        simUpdateTwin();
+      }
     },
     set_motor_speed: async (fr, br, bl, fl) => {
       if (abort) throw new Error("腳本已中止");
-      log('info', `[腳本] drone.set_motor_speed(${fr}, ${br}, ${bl}, ${fl})`);
-      cM = [Number(fr) || 0, Number(br) || 0, Number(bl) || 0, Number(fl) || 0].map(v => Math.max(0, Math.min(1000, v)));
-      updateMotorLoop();
-      await send(P.motorAll(cM[0], cM[1], cM[2], cM[3]));
+      if (!isSim) {
+        log('info', `[實機] drone.set_motor_speed(${fr}, ${br}, ${bl}, ${fl})`);
+        cM = [Number(fr) || 0, Number(br) || 0, Number(bl) || 0, Number(fl) || 0].map(v => Math.max(0, Math.min(1000, v)));
+        updateMotorLoop();
+        await send(P.motorAll(cM[0], cM[1], cM[2], cM[3]));
+      } else {
+        log('info', `🎮 [模擬] drone.set_motor_speed(${fr}, ${br}, ${bl}, ${fl})`);
+        const anyOn = (fr > 0 || br > 0 || bl > 0 || fl > 0);
+        simDrone.flight = anyOn ? 0x12 : 0x10;
+        simUpdateTwin();
+      }
     },
     stop_motors: async () => {
-      log('info', '[腳本] drone.stop_motors()');
-      cM = [0, 0, 0, 0];
-      updateMotorLoop();
-      await stopAllMotorsImmediate(true);
+      if (!isSim) {
+        log('info', '[實機] drone.stop_motors()');
+        cM = [0, 0, 0, 0];
+        updateMotorLoop();
+        await stopAllMotorsImmediate(true);
+      } else {
+        log('info', '🎮 [模擬] drone.stop_motors()');
+        simDrone.flight = 0x10;
+        simUpdateTwin();
+      }
     },
     set_roll: v => { cR = Number(v) || 0; },
     set_pitch: v => { cP = Number(v) || 0; },
@@ -1680,19 +1977,51 @@ async function executeScript(code) {
     set_throttle: v => { cT = Number(v) || 0; },
     move: async (sec = 1) => {
       if (abort) throw new Error("腳本已中止");
-      log('info', `[腳本] drone.move(${sec}s) R:${cR} P:${cP} Y:${cY} T:${cT}`);
-      const end = Date.now() + sec * 1000;
-      while (Date.now() < end) {
-        if (abort) throw new Error("腳本已中止");
-        await send(P.ctl(cR, cP, cY, cT));
-        await sleep(50);
+      if (!isSim) {
+        log('info', `[實機] drone.move(${sec}s) R:${cR} P:${cP} Y:${cY} T:${cT}`);
+        const end = Date.now() + sec * 1000;
+        while (Date.now() < end) {
+          if (abort) throw new Error("腳本已中止");
+          await send(P.ctl(cR, cP, cY, cT));
+          await sleep(50);
+        }
+        hover();
+      } else {
+        log('info', `🎮 [模擬] drone.move(${sec}s) R:${cR} P:${cP} Y:${cY} T:${cT}`);
+        const end = Date.now() + sec * 1000;
+        const dt = 0.05;
+        while (Date.now() < end) {
+          if (abort) throw new Error("腳本已中止");
+          const vForward = (cP / 100) * 0.8;
+          const vRight = (cR / 100) * 0.8;
+          const vUp = (cT / 100) * 0.6;
+          const yawRad = simDrone.yaw * (Math.PI / 180);
+
+          simDrone.yaw = (simDrone.yaw + (cY / 100) * 90 * dt) % 360;
+          if (simDrone.yaw > 180) simDrone.yaw -= 360;
+          if (simDrone.yaw < -180) simDrone.yaw += 360;
+
+          const dx = (vRight * Math.cos(yawRad) + vForward * Math.sin(yawRad)) * dt;
+          const dz = (-vForward * Math.cos(yawRad) + vRight * Math.sin(yawRad)) * dt;
+
+          simDrone.x += dx;
+          simDrone.z += dz;
+          simDrone.y = Math.max(0.05, Math.min(2.0, simDrone.y + vUp * dt));
+          simDrone.roll = (cR / 100) * 15;
+          simDrone.pitch = (cP / 100) * 15;
+          simDrone.battery = Math.max(10, simDrone.battery - 0.02);
+
+          simUpdateTwin();
+          await sleep(50);
+        }
+        simDrone.roll = simDrone.pitch = 0;
+        simUpdateTwin();
       }
-      hover();
     },
-    get_battery: () => st.battery,
-    get_height: () => (st.bottom > 0 ? (st.bottom / 10).toFixed(1) : 0),
-    get_front_distance: () => (st.front > 0 ? (st.front / 10).toFixed(1) : 0),
-    get_attitude: () => ({ roll: st.roll, pitch: st.pitch, yaw: st.yaw })
+    get_battery: () => (isSim ? Math.round(simDrone.battery) : st.battery),
+    get_height: () => (isSim ? (simDrone.y * 100).toFixed(1) : (st.bottom > 0 ? (st.bottom / 10).toFixed(1) : 0)),
+    get_front_distance: () => (isSim ? (simDrone.front / 10).toFixed(1) : (st.front > 0 ? (st.front / 10).toFixed(1) : 0)),
+    get_attitude: () => (isSim ? { roll: simDrone.roll, pitch: simDrone.pitch, yaw: simDrone.yaw } : { roll: st.roll, pitch: st.pitch, yaw: st.yaw })
   };
 
   const scriptSleep = async sec => {
@@ -1727,21 +2056,25 @@ async function executeScript(code) {
     `);
 
     await asyncFn(drone, scriptSleep, scriptPrint, sleep);
-    log('info', '✅ 腳本執行完畢。');
+    log('info', isSim ? '✅ 🎮 [模擬] 腳本執行完畢。' : '✅ [實機] 腳本執行完畢。');
   } catch (err) {
     if (!abort) log('err', `❌ 腳本錯誤: ${err.message}`);
   } finally {
     if (motorLoop) { clearInterval(motorLoop); motorLoop = null; }
-    try { await send(P.motorAll(0, 0, 0, 0)); } catch (e) {}
+    if (!isSim) {
+      try { await send(P.motorAll(0, 0, 0, 0)); } catch (e) {}
+    }
     isScriptRunning = false;
+    isSimRunning = false;
     $('btnRunScript').disabled = false;
     $('btnStopScript').disabled = true;
+    setUi();
   }
 }
-
 // 初始化
 window.addEventListener('DOMContentLoaded', () => {
   loadPreset();
+  updateExecModeUI();
   setUi();
   log('info', `系統就緒 [版本: ${APP_VERSION}]。請確認控制器已接上 USB 並開機。`);
 });
