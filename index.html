@@ -466,7 +466,7 @@ if (!window.THREE) {
   <div class="header-spacer"></div>
   <div class="header-right">
     <!-- 版本建置流水號 -->
-    <span class="version-badge" title="版本建置流水號">v1.8.2-b20261109.1145</span>
+    <span class="version-badge" title="版本建置流水號">v1.8.3-b20261109.1150</span>
 
     <span id="conn" class="badge">未連線</span>
     <button id="btnConnect" class="primary">連接控制器</button>
@@ -882,7 +882,7 @@ if (!window.THREE) {
 /* ============================================================
    1. 通訊協定與封包核心 (PROTOCOL Core)
    ============================================================ */
-const APP_VERSION = "v1.8.2-b20261109.1145";
+const APP_VERSION = "v1.8.3-b20261109.1150";
 
 function crc16(bytes, crc = 0) {
   for (const b of bytes) {
@@ -1403,7 +1403,7 @@ async function pollLoop() {
     if (!isScriptRunning) {
       const imu = $('imuOn').checked;
       const seq = isScanning360
-        ? [T_RANGE, T_MOTION]
+        ? [T_RANGE, T_MOTION, T_RANGE, T_STATE]
         : (imu ? [T_MOTION, T_RANGE, T_ALTITUDE, T_FLOW, T_CARD_COLOR, T_MOTION, T_RANGE, T_STATE] : [T_STATE, T_RANGE]);
       poll(seq[i++ % seq.length]);
     }
@@ -1772,17 +1772,34 @@ async function doTakeoff() {
     return false;
   }
   await prepare();
+  log('info', '送出起飛指令 (TakeOff)，等待無人機離地啟動...');
+  send(P.takeoff());
   const t0 = performance.now();
-  while (!abort && performance.now() - t0 < 4000 && st.flight !== 0x12 && st.flight !== 0x13) {
-    send(P.takeoff());
-    await sleep(100);
+  let lastSend = t0;
+
+  while (!abort && performance.now() - t0 < 5000) {
+    // 檢查無人機是否進入起飛或飛行狀態:
+    // 0x11: 啟動中 (Start), 0x12: 起飛中 (TakeOff), 0x13: 飛行中 (Flight)
+    if (st.flight === 0x11 || st.flight === 0x12 || st.flight === 0x13) {
+      break;
+    }
+    // 主動向無人機請求 State 狀態，確保 st.flight 即時更新反饋
+    poll(T_STATE);
+    // 每間隔 1.2 秒若仍為待命狀態再補發一次，避免頻繁轟炸序列埠阻塞封包
+    if (performance.now() - lastSend > 1200) {
+      send(P.takeoff());
+      lastSend = performance.now();
+    }
+    await sleep(80);
   }
+
   if (abort) return false;
-  if (st.flight !== 0x12 && st.flight !== 0x13) {
-    log('err', '4 秒內無人機未確認進入起飛狀態，改送降落。');
-    send(P.land()); return false;
+  if (st.flight !== 0x11 && st.flight !== 0x12 && st.flight !== 0x13) {
+    log('err', `5 秒內無人機未確認進入起飛狀態 (目前: ${FLIGHT[st.flight] || st.flight})，安全改送降落。`);
+    send(P.land());
+    return false;
   }
-  log('info', '已確認起飛，等待 3.5 秒完成爬升並平穩懸停。');
+  log('info', `✅ 已確認無人機進入起飛狀態「${FLIGHT[st.flight] || st.flight}」，等待 3.5 秒完成爬升並平穩懸停。`);
   return nap(3500);
 }
 
@@ -1797,14 +1814,22 @@ async function doLand() {
     return false;
   }
   hover();
+  log('info', '送出降落指令 (Land)...');
+  send(P.land());
   const t0 = performance.now();
-  while (!abort && performance.now() - t0 < 4000 && st.flight !== 0x14 && st.flight !== 0x10) {
-    send(P.land());
-    await sleep(100);
+  let lastSend = t0;
+
+  while (!abort && performance.now() - t0 < 5000 && st.flight !== 0x14 && st.flight !== 0x10) {
+    poll(T_STATE);
+    if (performance.now() - lastSend > 1000) {
+      send(P.land());
+      lastSend = performance.now();
+    }
+    await sleep(80);
   }
   if (abort) return false;
   log('info', '已確認降落接地。');
-  return nap(2500);
+  return nap(2000);
 }
 
 function run(fn) {
@@ -1948,13 +1973,13 @@ async function doScan360(yawSpeed = 10) {
   }
   const btn = $('btnScan360');
   const origBtnText = btn ? btn.textContent : '🌀 起飛自轉 360° 描繪障礙物';
-  isScanning360 = true;
   try {
     radarPoints.length = 0;
     drawRadar();
     if (twin && twin.clearRadarPoints) twin.clearRadarPoints();
 
     log('info', '🌀 開始 360° 原地自轉測距高密掃描程序...');
+    // 1. 先執行標準起飛（此時維持全狀態輪詢，確保 State/Flight 正確讀取）
     if (!(await doTakeoff())) {
       log('err', '起飛未成功，終止掃描。');
       return false;
@@ -1965,7 +1990,9 @@ async function doScan360(yawSpeed = 10) {
     if (!(await doHover(1500))) return false;
     if (abort) return false;
 
-    log('warn', `開始以極慢速度 Yaw=${yawSpeed} 原地自轉，持續以 25-35ms 高頻密集採樣機頭 ToF 測距...`);
+    // 2. 懸停平穩後，正式啟動 360° 高頻測距掃描模式！
+    isScanning360 = true;
+    log('warn', `開始以極慢速度 Yaw=${yawSpeed} 原地平穩自轉，以 25-35ms 高頻密集採樣機頭 ToF 測距...`);
     let lastYaw = st.yaw || 0;
     let totalTurn = 0;
     const targetTurn = 360;
