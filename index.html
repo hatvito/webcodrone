@@ -466,7 +466,7 @@ if (!window.THREE) {
   <div class="header-spacer"></div>
   <div class="header-right">
     <!-- 版本建置流水號 -->
-    <span class="version-badge" title="版本建置流水號">v1.8.3-b20261109.1150</span>
+    <span class="version-badge" title="版本建置流水號">v1.8.4-b20261109.1158</span>
 
     <span id="conn" class="badge">未連線</span>
     <button id="btnConnect" class="primary">連接控制器</button>
@@ -882,7 +882,7 @@ if (!window.THREE) {
 /* ============================================================
    1. 通訊協定與封包核心 (PROTOCOL Core)
    ============================================================ */
-const APP_VERSION = "v1.8.3-b20261109.1150";
+const APP_VERSION = "v1.8.4-b20261109.1158";
 
 function crc16(bytes, crc = 0) {
   for (const b of bytes) {
@@ -1813,23 +1813,61 @@ async function doLand() {
   if (typeof getExecMode === 'function' && getExecMode() === 'sim') {
     return false;
   }
-  hover();
-  log('info', '送出降落指令 (Land)...');
-  send(P.land());
-  const t0 = performance.now();
-  let lastSend = t0;
+  isScanning360 = false; // 確保關閉高密掃描通訊，釋放 RF 頻寬
+  log('info', '送出降落指令 (Land: FlightEvent.Landing)...');
 
-  while (!abort && performance.now() - t0 < 5000 && st.flight !== 0x14 && st.flight !== 0x10) {
-    poll(T_STATE);
-    if (performance.now() - lastSend > 1000) {
-      send(P.land());
-      lastSend = performance.now();
-    }
-    await sleep(80);
+  // 1. 先歸零水平位移與姿態控制
+  for (let i = 0; i < 2; i++) {
+    await send(P.ctl(0, 0, 0, 0));
+    await sleep(25);
   }
+
+  // 2. 連續高頻發送降落指令 (每 100ms 一次，比照官方 Python SDK)，直到確認無人機進入 0x14 (Landing) 或 0x10 (Ready)
+  const t0 = performance.now();
+  let enteredLanding = false;
+
+  while (!abort && performance.now() - t0 < 6000) {
+    send(P.ctl(0, 0, 0, 0));
+    send(P.land());
+    poll(T_STATE);
+
+    if (st.flight === 0x14 || st.flight === 0x10) {
+      enteredLanding = true;
+      break;
+    }
+    await sleep(100);
+  }
+
   if (abort) return false;
-  log('info', '已確認降落接地。');
-  return nap(2000);
+
+  if (enteredLanding) {
+    log('info', `✅ 已確認無人機進入降落狀態「${FLIGHT[st.flight] || st.flight}」，平穩接地中...`);
+  } else {
+    log('warn', `未偵測到降落狀態回饋 (目前: ${FLIGHT[st.flight] || st.flight})，啟動雙重強制降落防護...`);
+    for (let i = 0; i < 6; i++) {
+      send(P.land());
+      send(P.cmd(0x07, 0x12)); // FlightEvent.Landing
+      send(P.ctl(0, 0, 0, -40)); // 負向油門輔助下沉
+      await sleep(100);
+    }
+  }
+
+  // 3. 等待無人機降落觸地並停轉螺旋槳 (官方標準等待 3.5 秒)
+  const tWait = performance.now();
+  while (performance.now() - tWait < 4000) {
+    if (abort) return false;
+    poll(T_STATE);
+    if (st.flight === 0x10 || st.flight === 0x20) {
+      break;
+    }
+    await sleep(150);
+  }
+
+  // 4. 接地後強制切斷馬達動力與停止飛行控制器
+  await send(P.ctl(0, 0, 0, 0));
+  await send(P.stop());
+  log('info', '🛬 無人機已安全降落接地，動力完全切斷。');
+  return true;
 }
 
 function run(fn) {
@@ -2024,13 +2062,15 @@ async function doScan360(yawSpeed = 10) {
       return false;
     }
 
-    log('info', `✅ 自轉 360° 完成（共高密記錄 ${radarPoints.length} 個障礙點），懸停 1.5 秒...`);
+    // 360° 自轉測繪完成，立即關閉高密掃描通訊，徹底釋放 RF 通訊頻寬給懸停與降落指令！
+    isScanning360 = false;
+    log('info', `✅ 自轉 360° 完成（共高密記錄 ${radarPoints.length} 個障礙點），懸停 1.5 秒確認平穩...`);
     hover();
     if (!(await doHover(1500))) return false;
 
     log('info', '開始自動安全降落...');
     await doLand();
-    log('info', '🏁 360° 環景高密測距掃描順利完成！');
+    log('info', '🏁 360° 環景高密測距掃描順利完成！請檢視雷達圖與 3D 空間點雲。');
     return true;
   } finally {
     isScanning360 = false;
@@ -2085,14 +2125,20 @@ async function emergencyStop() {
   }
   if (!connected) return;
   abort = true;
-  log('err', '🛑 [緊急停止] 切斷馬達動力！');
+  isScanning360 = false;
+  log('err', '🛑 [緊急停止] 強制中斷並切斷所有馬達動力！');
   stopAllMotorsImmediate(false);
   if (isScriptRunning) stopRunningScript();
-  for (let i = 0; i < 3; i++) {
-    send(P.motorAll(0, 0, 0, 0));
-    send(P.stop());
-    await sleep(20);
+
+  // 清空佇列並連發強制煞停 (CommandType.Stop 0x01 + FlightEvent.Stop 0x07,0x10 + Motor 0 + Throttle -100)
+  for (let i = 0; i < 5; i++) {
+    send(P.motorAll(0, 0, 0, 0));   // 0x60: 四馬達 PWM 歸零
+    send(P.cmd(0x01, 0x00));        // 0x11: CommandType.Stop
+    send(P.cmd(0x07, 0x10));        // 0x11: FlightEvent.Stop (飛行狀態強制熔斷)
+    send(P.ctl(0, 0, 0, -100));     // 0x10: 負推力切斷升力
+    await sleep(25);
   }
+  log('err', '🛑 [緊急煞停已送出] 馬達 PWM 歸零、FlightEvent.Stop 與 CommandType.Stop 已連續強制灌入！');
 }
 $('estop').onclick = emergencyStop;
 document.addEventListener('keydown', e => {
