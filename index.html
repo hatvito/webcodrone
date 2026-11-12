@@ -882,7 +882,7 @@ if (!window.THREE) {
 /* ============================================================
    1. 通訊協定與封包核心 (PROTOCOL Core)
    ============================================================ */
-const APP_VERSION = "v1.8.6-b20261112.1000";
+const APP_VERSION = "v1.8.7-b20261112.1015";
 
 function crc16(bytes, crc = 0) {
   for (const b of bytes) {
@@ -1083,9 +1083,17 @@ function drawRadar() {
   rCtx.arc(cx, cy, 3.5, 0, Math.PI * 2);
   rCtx.fill();
 
+  // 顯示當前即時航向與點雲數據
+  const heading = isSim && typeof simDrone !== 'undefined' ? simDrone.yaw : (st.yaw || 0);
+  rCtx.fillStyle = isSim ? '#38bdf8' : '#34d399';
+  rCtx.font = '10px monospace';
+  rCtx.fillText('朝向: ' + (heading >= 0 ? '+' : '') + heading.toFixed(1) + '°', 8, 15);
+  rCtx.fillText('障礙: ' + radarPoints.length + ' 點', 8, 28);
+
   if ($('radarCount')) $('radarCount').textContent = radarPoints.length + ' 點';
 }
 drawRadar();
+setInterval(drawRadar, 50); // 持續 20Hz 刷新雷達機頭朝向掃描線與障礙點雲
 
 
 /* ============================================================
@@ -1333,6 +1341,7 @@ function onFrame(f) {
     setImu('ax', ax); setImu('ay', ay); setImu('az', az);
     setImu('gr', gr); setImu('gp', gp); setImu('gy', gy);
     setImu('ar', st.roll); setImu('ap', st.pitch); setImu('ayaw', st.yaw);
+    drawRadar(); // 機頭航向角即時帶動雷達掃描線旋轉
 
     note = `R:${st.roll}° P:${st.pitch}° Y:${st.yaw}°`;
 
@@ -1429,13 +1438,21 @@ async function pollLoop() {
   while (connected) {
     if (!isScriptRunning && !isScanning360) {
       const imu = $('imuOn').checked;
-      const seq = imu ? [T_MOTION, T_RANGE, T_ALTITUDE, T_FLOW, T_CARD_COLOR, T_MOTION, T_RANGE, T_STATE] : [T_STATE, T_RANGE];
+      const seq = imu
+        ? [T_MOTION, T_RANGE, T_POS, T_ALTITUDE, T_FLOW, T_CARD_COLOR, T_MOTION, T_RANGE, T_STATE]
+        : [T_STATE, T_RANGE, T_MOTION];
       poll(seq[i++ % seq.length]);
+      await sleep(imu ? 35 : 150);
     } else if (isScanning360) {
-      // 掃描期間由 doScan360 主迴圈掌控 Range 與 Motion，此處僅慢速輪詢 State 監控電池與模式
-      if (i++ % 6 === 0) poll(T_STATE);
+      // 360° 自轉高密掃描期間：極密交替輪詢 Range 與 Motion，偶爾輪詢 State 監控電池與模式
+      const scanSeq = [T_RANGE, T_MOTION, T_RANGE, T_MOTION, T_STATE];
+      poll(scanSeq[i++ % scanSeq.length]);
+      await sleep(25);
+    } else if (isScriptRunning) {
+      // 腳本執行期間：維持姿態與狀態監控
+      poll(i++ % 2 === 0 ? T_MOTION : T_STATE);
+      await sleep(50);
     }
-    await sleep(isScanning360 ? 60 : ($('imuOn').checked ? 40 : 250));
   }
 }
 
@@ -1586,8 +1603,8 @@ function initTwin() {
     requestAnimationFrame(frame);
     const now = performance.now();
     const isSim = typeof getExecMode === 'function' && getExecMode() === 'sim';
-    const live = (connected && d.flight && now - d.flight.t < 1500) || isSim;
-    const attOk = (d.att && now - d.att.t < 1000) || isSim;
+    const live = (connected && ((d.flight && now - d.flight.t < 2500) || (d.att && now - d.att.t < 1500))) || isSim;
+    const attOk = (d.att && now - d.att.t < 1500) || isSim;
     const sg = id => ($(id).checked ? -1 : 1);
 
     if (d.att) {
@@ -1987,11 +2004,11 @@ async function playScanBeeps(count) {
 }
 
 // 🎮 數位雙生純模擬模式：極致慢速 360° 高密度自轉測距掃描（獨立動作，不含起降）
-async function doSimScan360(speed = 10) {
+async function doSimScan360(speed = 18) {
   const btn = $('btnScan360');
   const origBtnText = btn ? btn.textContent : '🌀 原地自轉 360° 描繪障礙物 (獨立動作)';
   isSimRunning = true;
-  updateButtons();
+  setUi(); // 更新按鈕狀態
   try {
     radarPoints.length = 0;
     drawRadar();
@@ -2001,10 +2018,17 @@ async function doSimScan360(speed = 10) {
     log('info', '🔊 [提示音] 開始掃描：逼、逼 (2 聲)');
     await playScanBeeps(2);
 
+    // 若虛擬機在地面，自動抬升至 0.6m 懸停展示自轉測繪
+    if (simDrone.y < 0.1) {
+      simDrone.flight = 0x13;
+      simDrone.y = 0.6;
+      simUpdateTwin();
+    }
+
     let turned = 0;
     const targetTurn = 360;
     const dt = 0.035; // 35ms 超高密採樣步長
-    const degPerSec = speed <= 10 ? 10.0 : (speed <= 16 ? 18.0 : speed * 1.3);
+    const degPerSec = speed <= 12 ? 12.0 : (speed <= 18 ? 18.0 : speed * 1.2);
 
     while (!abort && turned < targetTurn) {
       const dDeg = degPerSec * dt;
@@ -2045,7 +2069,7 @@ async function doSimScan360(speed = 10) {
   } finally {
     isSimRunning = false;
     if (btn) btn.textContent = origBtnText;
-    updateButtons();
+    setUi();
   }
 }
 
@@ -2061,14 +2085,19 @@ async function doScan360(yawSpeed = 18) {
     drawRadar();
     if (twin && twin.clearRadarPoints) twin.clearRadarPoints();
 
+    const isFlight = (st.flight === 0x12 || st.flight === 0x13 || st.flight === 0x14);
+    if (!isFlight) {
+      log('warn', '💡 [地面/手持模式] 目前無人機為待命狀態（未起飛）。請緩慢將無人機水平自轉一圈以繪製點雲，或先點擊「起飛」升空懸停！');
+    }
+
     log('info', '🌀 啟動 360° 原地自轉測距高密掃描（純自轉獨立動作，起降由操作者掌控）...');
     log('info', '🔊 [提示音] 開始自轉掃描：逼、逼 (2 聲)');
     await playScanBeeps(2);
     if (abort) return false;
 
-    // 啟動 360° 高頻測距掃描模式
+    // 啟動 360° 高頻測距掃描模式 (pollLoop 會自動切換為高頻 Range/Motion 交替輪詢)
     isScanning360 = true;
-    log('warn', `開始以平穩速度 Yaw=${yawSpeed} 原地自轉，以 35ms 高頻同步採樣機頭 ToF 與 IMU...`);
+    log('warn', `開始以平穩速度 Yaw=${yawSpeed} 自轉測繪，連續高頻採樣機頭 ToF 與 IMU...`);
     let lastYaw = st.yaw || 0;
     let totalTurn = 0;
     const targetTurn = 360;
@@ -2077,12 +2106,11 @@ async function doScan360(yawSpeed = 18) {
     const maxScanMs = yawSpeed <= 14 ? 50000 : (yawSpeed <= 20 ? 35000 : 25000);
 
     while (!abort && Math.abs(totalTurn) < targetTurn && (performance.now() - t0 < maxScanMs)) {
-      // 傳送自轉動力
-      await send(P.ctl(0, 0, yawSpeed, 0));
-      // 主動連續請求 Range 與 Motion 封包，確保 Yaw 與距離同步更新，絕不丟失角度
-      await send(P.req(T_RANGE));
-      await send(P.req(T_MOTION));
-      await sleep(35);
+      // 若在空中飛行中，持續送出偏航動力維持自旋；若在地面，純靠陀螺儀追蹤角度
+      if (isFlight) {
+        await send(P.ctl(0, 0, yawSpeed, 0));
+      }
+      await sleep(40);
 
       const curYaw = st.yaw || 0;
       let diff = curYaw - lastYaw;
@@ -2098,10 +2126,12 @@ async function doScan360(yawSpeed = 18) {
       if (btn) btn.textContent = `🌀 掃描中 (${pct}% - 已轉 ${deg}°) [${radarPoints.length} 點]`;
     }
 
-    // 360° 自轉完畢，立即將自轉動力歸零（回復原地懸停或靜止狀態）
-    for (let i = 0; i < 3; i++) {
-      await send(P.ctl(0, 0, 0, 0));
-      await sleep(25);
+    // 360° 自轉完畢，若在空中則將自轉動力歸零回復平穩懸停
+    if (isFlight) {
+      for (let i = 0; i < 3; i++) {
+        await send(P.ctl(0, 0, 0, 0));
+        await sleep(25);
+      }
     }
     // 立即關閉高密掃描通訊
     isScanning360 = false;
@@ -2115,7 +2145,7 @@ async function doScan360(yawSpeed = 18) {
     log('info', '🔊 [提示音] 掃描完成提醒：逼、逼、逼、逼、逼 (5 聲)');
     await playScanBeeps(5);
 
-    log('info', '🏁 360° 自轉測繪完成！無人機保持當前狀態（若在空中懸停請手動點擊「降落」，地面則可直接檢視點雲）。');
+    log('info', '🏁 360° 自轉測繪完成！無人機保持當前狀態（空中懸停請手動點擊「降落」，地面則可直接檢視點雲）。');
     return true;
   } finally {
     isScanning360 = false;
@@ -2146,12 +2176,20 @@ $('btnScan360').onclick = async () => {
 
   // 🛰️ 實機模式：安全確認對話框（標明為獨立動作，不含起降）
   const flightStateName = FLIGHT[st.flight] || (st.flight ? `0x${st.flight.toString(16)}` : '已連線');
-  const ok = await confirmDialog('360° 原地自轉測距高密描繪 (獨立動作)', [
+  const isGround = (st.flight === 0x10 || !st.flight);
+  const items = [
     `目前飛行狀態：「${flightStateName}」，電池電量：${st.battery || '—'}%`,
     `自轉設定：${desc}，極密取樣周圍障礙物點雲。`,
-    '提示音效：開始前鳴響 2 聲，自轉完成後鳴響 5 聲提醒結束。',
-    '獨立動作：本動作不包含起飛與降落；在空中自轉完畢將保持懸停，起降完全由操作者自主決定。'
-  ], `# 原地 360 度獨立測繪 (開始嗶 2 聲，結束嗶 5 聲)\ndrone.scan_360(${yawSpeed})`);
+    '提示音效：開始前鳴響 2 聲，自轉完成後鳴響 5 聲提醒結束。'
+  ];
+  if (isGround) {
+    items.push('⚠️ 提示：無人機目前在地面「待命」狀態（螺旋槳未啟動）。');
+    items.push('👉 若要在空中自動旋轉測繪：請先關閉此對話框，點擊「🛫 起飛」升空懸停後再按此按鈕！');
+    items.push('👉 若要在地面手持測試：點擊「確認」後，請用手緩慢將無人機水平自轉一圈，雷達與 3D 雙生即時描繪點雲。');
+  } else {
+    items.push('獨立動作：本動作不包含起飛與降落；在空中自轉完畢將保持懸停，起降完全由操作者自主決定。');
+  }
+  const ok = await confirmDialog('360° 原地自轉測距高密描繪 (獨立動作)', items, `# 原地 360 度獨立測繪 (開始嗶 2 聲，結束嗶 5 聲)\ndrone.scan_360(${yawSpeed})`);
   if (!ok) { log('info', '已取消 360° 掃描程序。'); return; }
 
   run(async () => {
