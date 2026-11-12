@@ -466,7 +466,7 @@ if (!window.THREE) {
   <div class="header-spacer"></div>
   <div class="header-right">
     <!-- 版本建置流水號 -->
-    <span class="version-badge" title="版本建置流水號">v1.8.4-b20261109.1158</span>
+    <span class="version-badge" title="版本建置流水號">v1.8.5-b20261112.0930</span>
 
     <span id="conn" class="badge">未連線</span>
     <button id="btnConnect" class="primary">連接控制器</button>
@@ -526,9 +526,9 @@ if (!window.THREE) {
             <option value="medium">⚡ 中速巡航 (~30°/s, 約 12 秒, 採樣 200~300 點)</option>
           </select>
         </div>
-        <button id="btnScan360" class="btn-takeoff" style="width:100%; margin-top:8px; font-weight:700; background:var(--teal); border-color:var(--teal);" disabled>🌀 起飛自轉 360° 描繪障礙物</button>
+        <button id="btnScan360" class="btn-takeoff" style="width:100%; margin-top:8px; font-weight:700; background:var(--teal); border-color:var(--teal);" disabled>🌀 原地自轉 360° 描繪障礙物 (獨立動作)</button>
       </div>
-      <p class="note">原地起飛懸停後，以極致慢速溫和平穩自轉 360 度，透過機頭 ToF 測距儀高密度取樣描繪周遭障礙物點雲，完成後自動降落；支援實機與純數位雙生模擬機。</p>
+      <p class="note">純自轉高密掃描（不含起飛與降落）：無人機置於地面手持或於空中懸停時皆可獨立觸發；開始前鳴響 2 聲，平穩自轉 360 度密集採樣四周障礙物，完成後鳴響 5 聲提醒結束；起飛與降落完全由操作者自主掌控。</p>
     </section>
 
     <!-- 飛行動作與點動微調 (Jog) -->
@@ -882,7 +882,7 @@ if (!window.THREE) {
 /* ============================================================
    1. 通訊協定與封包核心 (PROTOCOL Core)
    ============================================================ */
-const APP_VERSION = "v1.8.4-b20261109.1158";
+const APP_VERSION = "v1.8.5-b20261112.0930";
 
 function crc16(bytes, crc = 0) {
   for (const b of bytes) {
@@ -1917,10 +1917,52 @@ $('btnLand').onclick = async () => {
   run(async () => { log('warn', '開始降落。'); await doLand(); });
 };
 
-// 🎮 數位雙生純模擬模式：極致慢速 360° 高密度自轉測距掃描
+// 🔊 360° 自轉提示音效 (開始 2 聲，結束 5 聲；同步推送到硬體控制器/無人機與瀏覽器 Web Audio)
+async function playScanBeeps(count) {
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  let actx = null;
+  try {
+    actx = new AudioContext();
+  } catch (e) {}
+
+  const freq = count === 2 ? 1400 : 1800; // 開始 2 聲 1400Hz，結束 5 聲 1800Hz
+  const durMs = count === 2 ? 120 : 90;
+  const gapMs = count === 2 ? 90 : 70;
+
+  for (let i = 0; i < count; i++) {
+    // 實體硬體蜂鳴器 (控制器 0x20 與無人機 0x10)
+    if (connected) {
+      try {
+        send(P.buzzer(freq, durMs, 0x20));
+        send(P.buzzer(freq, durMs, 0x10));
+      } catch (e) {}
+    }
+    // 瀏覽器端 Web Audio 音效 (確保操作者即使在吵雜環境也能由電腦喇叭/耳機聽見)
+    if (actx) {
+      try {
+        const osc = actx.createOscillator();
+        const gain = actx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, actx.currentTime);
+        gain.gain.setValueAtTime(0.2, actx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + (durMs / 1000));
+        osc.connect(gain);
+        gain.connect(actx.destination);
+        osc.start();
+        osc.stop(actx.currentTime + (durMs / 1000));
+      } catch (e) {}
+    }
+    await sleep(durMs + gapMs);
+  }
+  if (actx) {
+    setTimeout(() => { try { actx.close(); } catch (e) {} }, 500);
+  }
+}
+
+// 🎮 數位雙生純模擬模式：極致慢速 360° 高密度自轉測距掃描（獨立動作，不含起降）
 async function doSimScan360(speed = 10) {
   const btn = $('btnScan360');
-  const origBtnText = btn ? btn.textContent : '🌀 起飛自轉 360° 描繪障礙物';
+  const origBtnText = btn ? btn.textContent : '🌀 原地自轉 360° 描繪障礙物 (獨立動作)';
   isSimRunning = true;
   updateButtons();
   try {
@@ -1928,27 +1970,13 @@ async function doSimScan360(speed = 10) {
     drawRadar();
     if (twin && twin.clearRadarPoints) twin.clearRadarPoints();
 
-    log('info', '🎮 [純數位雙生模擬] 虛擬無人機原地起飛，上升至 0.45 公尺懸停...');
-    simDrone.flight = 0x11; // TAKEOFF
-    simUpdateTwin();
-    for (let i = 0; i < 25; i++) {
-      if (abort) break;
-      simDrone.y = Math.min(0.45, simDrone.y + 0.018);
-      simDrone.bottom = Math.round(simDrone.y * 1000);
-      simUpdateTwin();
-      await sleep(35);
-    }
-    simDrone.flight = 0x12; // FLIGHT
-    simUpdateTwin();
-    log('info', '🎮 [純數位雙生模擬] 懸停穩定，開始極致慢速 360° 自轉高密障礙物測繪...');
+    log('info', '🎮 [純數位雙生模擬] 啟動 360° 原地自轉高密測距掃描（獨立動作，不含起降）...');
+    log('info', '🔊 [提示音] 開始掃描：逼、逼 (2 聲)');
+    await playScanBeeps(2);
 
     let turned = 0;
     const targetTurn = 360;
     const dt = 0.035; // 35ms 超高密採樣步長
-    // 依 speed 設定角速度:
-    // speed=10 => 10.0°/s (耗時 36 秒，密集採樣 ~1028 點)
-    // speed=15 => 18.0°/s (耗時 20 秒，密集採樣 ~570 點)
-    // speed=22 => 30.0°/s (耗時 12 秒，密集採樣 ~340 點)
     const degPerSec = speed <= 10 ? 10.0 : (speed <= 16 ? 18.0 : speed * 1.3);
 
     while (!abort && turned < targetTurn) {
@@ -1981,21 +2009,11 @@ async function doSimScan360(speed = 10) {
       return false;
     }
 
-    log('info', `🎮 [純數位雙生模擬] ✅ 360° 自轉高密掃描完成！共密集採樣 ${radarPoints.length} 個障礙點，準備降落...`);
-    simDrone.flight = 0x13; // LANDING
-    simUpdateTwin();
-    for (let i = 0; i < 25; i++) {
-      if (abort) break;
-      simDrone.y = Math.max(0, simDrone.y - 0.02);
-      simDrone.bottom = Math.round(simDrone.y * 1000);
-      simUpdateTwin();
-      await sleep(35);
-    }
-    simDrone.y = 0;
-    simDrone.bottom = 0;
-    simDrone.flight = 0x10; // READY
-    simUpdateTwin();
-    log('info', '🎮 [純數位雙生模擬] 🏁 虛擬無人機已平穩降落，環境高密點雲已完整繪製於 3D 視窗與 2D 雷達！');
+    log('info', `🎮 [純數位雙生模擬] ✅ 360° 自轉高密掃描完成！共密集採樣 ${radarPoints.length} 個障礙點。`);
+    log('info', '🔊 [提示音] 掃描完成：逼、逼、逼、逼、逼 (5 聲)');
+    await playScanBeeps(5);
+
+    log('info', '🎮 [純數位雙生模擬] 🏁 虛擬無人機保持當前姿態，點雲已完整繪製於 3D 視窗與 2D 雷達！');
     return true;
   } finally {
     isSimRunning = false;
@@ -2004,33 +2022,26 @@ async function doSimScan360(speed = 10) {
   }
 }
 
-// 🛰️ 實機模式：極致慢速 360° 高密度自轉測距掃描
+// 🛰️ 實機模式：極致慢速 360° 高密度自轉測距掃描（獨立動作，不含起降）
 async function doScan360(yawSpeed = 10) {
   if (typeof getExecMode === 'function' && getExecMode() === 'sim') {
     return await doSimScan360(yawSpeed);
   }
   const btn = $('btnScan360');
-  const origBtnText = btn ? btn.textContent : '🌀 起飛自轉 360° 描繪障礙物';
+  const origBtnText = btn ? btn.textContent : '🌀 原地自轉 360° 描繪障礙物 (獨立動作)';
   try {
     radarPoints.length = 0;
     drawRadar();
     if (twin && twin.clearRadarPoints) twin.clearRadarPoints();
 
-    log('info', '🌀 開始 360° 原地自轉測距高密掃描程序...');
-    // 1. 先執行標準起飛（此時維持全狀態輪詢，確保 State/Flight 正確讀取）
-    if (!(await doTakeoff())) {
-      log('err', '起飛未成功，終止掃描。');
-      return false;
-    }
+    log('info', '🌀 啟動 360° 原地自轉測距高密掃描（純自轉獨立動作，起降由操作者掌控）...');
+    log('info', '🔊 [提示音] 開始自轉掃描：逼、逼 (2 聲)');
+    await playScanBeeps(2);
     if (abort) return false;
 
-    log('info', '起飛完成，懸停穩定 1.5 秒確認機身平穩...');
-    if (!(await doHover(1500))) return false;
-    if (abort) return false;
-
-    // 2. 懸停平穩後，正式啟動 360° 高頻測距掃描模式！
+    // 啟動 360° 高頻測距掃描模式
     isScanning360 = true;
-    log('warn', `開始以極慢速度 Yaw=${yawSpeed} 原地平穩自轉，以 25-35ms 高頻密集採樣機頭 ToF 測距...`);
+    log('warn', `開始以平穩速度 Yaw=${yawSpeed} 原地自轉，以 25-35ms 高頻密集採樣機頭 ToF 測距...`);
     let lastYaw = st.yaw || 0;
     let totalTurn = 0;
     const targetTurn = 360;
@@ -2039,7 +2050,7 @@ async function doScan360(yawSpeed = 10) {
     const maxScanMs = yawSpeed <= 10 ? 60000 : (yawSpeed <= 16 ? 42000 : 25000);
 
     while (!abort && Math.abs(totalTurn) < targetTurn && (performance.now() - t0 < maxScanMs)) {
-      // 傳送微幅平穩自轉動力
+      // 傳送自轉動力
       await send(P.ctl(0, 0, yawSpeed, 0));
       // 主動連續請求 Range 封包，達成極密採樣
       await send(P.req(T_RANGE));
@@ -2057,20 +2068,24 @@ async function doScan360(yawSpeed = 10) {
       if (btn) btn.textContent = `🌀 掃描中 (${pct}% - 已轉 ${deg}°) [${radarPoints.length} 點]`;
     }
 
+    // 360° 自轉完畢，立即將自轉動力歸零（回復原地懸停或靜止狀態）
+    for (let i = 0; i < 3; i++) {
+      await send(P.ctl(0, 0, 0, 0));
+      await sleep(25);
+    }
+    // 立即關閉高密掃描通訊
+    isScanning360 = false;
+
     if (abort) {
       log('warn', '掃描中途被中斷！');
       return false;
     }
 
-    // 360° 自轉測繪完成，立即關閉高密掃描通訊，徹底釋放 RF 通訊頻寬給懸停與降落指令！
-    isScanning360 = false;
-    log('info', `✅ 自轉 360° 完成（共高密記錄 ${radarPoints.length} 個障礙點），懸停 1.5 秒確認平穩...`);
-    hover();
-    if (!(await doHover(1500))) return false;
+    log('info', `✅ 自轉 360° 完成！共高密採樣 ${radarPoints.length} 個障礙點。`);
+    log('info', '🔊 [提示音] 掃描完成提醒：逼、逼、逼、逼、逼 (5 聲)');
+    await playScanBeeps(5);
 
-    log('info', '開始自動安全降落...');
-    await doLand();
-    log('info', '🏁 360° 環景高密測距掃描順利完成！請檢視雷達圖與 3D 空間點雲。');
+    log('info', '🏁 360° 自轉測繪完成！無人機保持當前狀態（若在空中懸停請手動點擊「降落」，地面則可直接檢視點雲）。');
     return true;
   } finally {
     isScanning360 = false;
@@ -2081,7 +2096,10 @@ async function doScan360(yawSpeed = 10) {
 $('btnScan360').onclick = async () => {
   const isSim = typeof getExecMode === 'function' && getExecMode() === 'sim';
   if (busy || (typeof isSimRunning !== 'undefined' && isSimRunning)) return;
-  if (!isSim && !preflight()) return;
+  if (!isSim && !connected) {
+    alert('請先點擊「連接控制器」建立實體連線！若要在桌面免硬體測試，請切換至「純數位雙生模擬機」模式。');
+    return;
+  }
 
   const mode = $('scanSpeedMode') ? $('scanSpeedMode').value : 'ultra_slow';
   let yawSpeed = 10;
@@ -2090,19 +2108,20 @@ $('btnScan360').onclick = async () => {
   else if (mode === 'medium') { yawSpeed = 22; desc = '⚡ 中速巡航 (~30°/s，約 12 秒)'; }
 
   if (isSim) {
-    // 🎮 純數位雙生模擬：零彈窗、零干擾，直接流暢進行虛擬高密掃描
-    log('info', `🎮 [純數位雙生模擬] 啟動 360° 自轉高密測距掃描（${desc}）...`);
+    // 🎮 純數位雙生模擬：直接流暢執行獨立自轉測繪
+    log('info', `🎮 [純數位雙生模擬] 啟動 360° 自轉高密測距掃描（${desc}，獨立動作）...`);
     await doSimScan360(yawSpeed);
     return;
   }
 
-  // 🛰️ 實機模式：才跳出安全確認對話框
-  const ok = await confirmDialog('360° 原地自轉測距與障礙物高密描繪', [
-    `目前電池: ${st.battery}%，飛行狀態「待命」。`,
-    `自轉模式：${desc}，轉動更平穩且取樣密度提升 15~20 倍（預估記錄 800~1000 點）。`,
-    '請確認周圍 1.5 公尺內無障礙物與人員，地面平整。',
-    '自轉一圈完成後將自動平穩降落。隨時可按 Esc 或緊急停止切斷動力。'
-  ], `drone.takeoff()\n# 原地極致慢速自轉 360 度並 ToF 點雲高密測繪\ndrone.scan_360(${yawSpeed})\ndrone.land()`);
+  // 🛰️ 實機模式：安全確認對話框（標明為獨立動作，不含起降）
+  const flightStateName = FLIGHT[st.flight] || (st.flight ? `0x${st.flight.toString(16)}` : '已連線');
+  const ok = await confirmDialog('360° 原地自轉測距高密描繪 (獨立動作)', [
+    `目前飛行狀態：「${flightStateName}」，電池電量：${st.battery || '—'}%`,
+    `自轉設定：${desc}，極密取樣周圍障礙物點雲。`,
+    '提示音效：開始前鳴響 2 聲，自轉完成後鳴響 5 聲提醒結束。',
+    '獨立動作：本動作不包含起飛與降落；在空中自轉完畢將保持懸停，起降完全由操作者自主決定。'
+  ], `# 原地 360 度獨立測繪 (開始嗶 2 聲，結束嗶 5 聲)\ndrone.scan_360(${yawSpeed})`);
   if (!ok) { log('info', '已取消 360° 掃描程序。'); return; }
 
   run(async () => {
@@ -2399,7 +2418,7 @@ function simRaycastDistance(x0, z0, yawDeg) {
 const PRESETS = {
   sensor_suite: `# CoDrone EDU 七大感測器全量即時讀取檢測腳本\n# 支援實機連線或純數位雙生模擬機執行\nprint("=== 📡 CoDrone EDU 七大感測器即時遙測檢測 ===")\n\n# 1. 加速度計 (m/s²)\nax = drone.get_x_accel()\nay = drone.get_y_accel()\naz = drone.get_z_accel()\nprint(f"1. 加速度計 (m/s²): X={ax}, Y={ay}, Z={az}")\n\n# 2. 陀螺儀角速度 (°/s)\ngx = drone.get_x_gyro()\ngy = drone.get_y_gyro()\ngz = drone.get_z_gyro()\nprint(f"2. 陀螺儀角速度 (°/s): Roll={gx}, Pitch={gy}, Yaw={gz}")\n\n# 3. 氣壓計與溫度\npress = drone.get_pressure()\ntemp = drone.get_temperature()\nprint(f"3. 氣壓計: {press} hPa, 機體內部溫度: {temp} °C")\n\n# 4. 光流感測器\nfx = drone.get_flow_x()\nfy = drone.get_flow_y()\nprint(f"4. 光流累計位移 (m): X={fx}, Y={fy}")\n\n# 5. 前方避障與 6. 底部測距\nfront = drone.get_front_range()\nbottom = drone.get_bottom_range()\nprint(f"5. 前方避障 ToF 距離: {front} cm")\nprint(f"6. 底部高度 ToF 測距: {bottom} cm")\n\n# 7. 雙通道色彩感測器\ncolors = drone.get_colors()\nprint(f"7. 底部色彩感測: 前感測器={colors[0]}, 後感測器={colors[1]}")\nprint("=== ✅ 七大感測器即時遙測檢測完畢！ ===")`,
   test_flight: `# 雙模支援：可在「實機 + 數位雙生」或「純數位雙生模擬機」執行\n# 動作：起飛 ➔ 懸停 2 秒 ➔ 降落\nprint("開始執行飛行測試...")\ndrone.takeoff()\ndrone.hover(2)\ndrone.land()\nprint("飛行測試圓滿完成！")`,
-  scan_360: `# 360° 原地自轉測距高密障礙物描繪腳本 (實機與模擬機皆支援)\n# 預設採用極致慢速 (速度 10，約 10°/s) 密集採樣周圍障礙物點雲！\nprint("開始 360 度環景環境高密測繪任務...")\nprint("目前電池電量:", drone.get_battery(), "%")\ndrone.takeoff()\ndrone.hover(1.5)\n\nprint("開始極慢速自轉高密度掃描周遭障礙物...")\ndrone.scan_360(10)\n\nprint("掃描完畢，懸停並準備降落...")\ndrone.hover(1.5)\ndrone.land()\nprint("任務圓滿完成！請檢視雷達圖與 3D 數位雙生高密障礙物點雲。")`,
+  scan_360: `# 360° 原地自轉獨立高密測距掃描腳本 (實機與模擬機皆支援)\n# 注意：scan_360 為純自轉獨立動作（不含起降），開始嗶 2 聲，結束嗶 5 聲提醒！\n# 操作者可自由選擇是否在空中執行，或在桌面/轉盤上靜態測繪：\nprint("開始 360 度環景環境高密測繪程序...")\nprint("目前電池電量:", drone.get_battery(), "%")\n\n# 範例 1：若要空中測繪，手動加入起飛與懸停（若已在空中或地面手持測繪可省略起降）：\ndrone.takeoff()\ndrone.hover(1.5)\n\nprint("開始原地自轉高密度掃描（即將鳴響 2 聲）...")\ndrone.scan_360(10) # 速度 10 (極致慢速高密採樣，結束鳴響 5 聲)\n\nprint("自轉測繪完畢，準備降落...")\ndrone.hover(1.5)\ndrone.land()\nprint("任務圓滿完成！請檢視雷達圖與 3D 空間點雲。")`,
   motor_test: `# CoDrone EDU 馬達轉速動力與單體測試\n# 注意：微型有刷空心杯馬達無編碼器，無法讀取實際 RPM，但可控制各馬達輸出動力 (PWM: 0~1000)\n\nprint("⚡ 測試 M1 前右馬達 (PWM: 350)...")\ndrone.send_motor_single(0, 350)\nsleep(1) # 運轉 1 秒\ndrone.send_motor_single(0, 0) # 停轉\nsleep(0.5)\n\nprint("⚡ 測試 M4 前左馬達 (PWM: 350)...")\ndrone.send_motor_single(3, 350)\nsleep(1)\ndrone.send_motor_single(3, 0)\nsleep(0.5)\n\nprint("⚡ 四馬達同時低速自檢 (PWM: 300)...")\ndrone.set_motor_speed(300, 300, 300, 300)\nsleep(1)\n\nprint("🛑 測試完成，停止所有馬達。")\ndrone.stop_motors()`,
   battery_check: `# 查詢感測器與電池資料 (實機與模擬機皆支援)\nbat = drone.get_battery()\nh = drone.get_height()\nfront = drone.get_front_distance()\natt = drone.get_attitude()\nprint("無人機電池電量:", bat, "%")\nprint("底部測距高度:", h, "cm")\nprint("前方測距障礙:", front, "cm")\nprint("姿態資訊: Roll=" + str(att['roll']) + ", Pitch=" + str(att['pitch']) + ", Yaw=" + str(att['yaw']))`,
   step_move: `# 前進與平移位移測試 (可於 3D 雙生空間觀察航跡路線)\ndrone.takeoff()\ndrone.hover(1.5)\n\nprint("前方飛行中 (Pitch=20)...")\ndrone.set_pitch(20)\ndrone.move(1)\n\nprint("右方平移中 (Roll=20)...")\ndrone.set_pitch(0)\ndrone.set_roll(20)\ndrone.move(1)\n\ndrone.set_roll(0)\ndrone.hover(1)\ndrone.land()\nprint("飛行任務結束，已繪製航跡於數位雙生中！")`
