@@ -521,9 +521,9 @@ if (!window.THREE) {
         <div style="display:flex; align-items:center; justify-content:space-between; margin-top:8px; font-size:11px; background:var(--bg-sub); padding:4px 8px; border-radius:4px; border:1px solid var(--line);">
           <span style="font-weight:600; color:var(--ink);">自轉速度 / 密度：</span>
           <select id="scanSpeedMode" style="font-size:11px; padding:2px 4px; border-radius:3px; border:1px solid var(--line);">
-            <option value="ultra_slow" selected>🐢 極致慢速高密 (~10°/s, 約 32 秒, 採樣 800~1000 點)</option>
-            <option value="slow">🕊️ 溫和標準慢速 (~18°/s, 約 20 秒, 採樣 400~600 點)</option>
-            <option value="medium">⚡ 中速巡航 (~30°/s, 約 12 秒, 採樣 200~300 點)</option>
+            <option value="slow" selected>🕊️ 溫和標準慢速 (~18°/s, 約 20 秒, 推薦)</option>
+            <option value="medium">⚡ 中速巡航 (~26°/s, 約 14 秒, 快速描繪)</option>
+            <option value="ultra_slow">🐢 超慢速高密 (~14°/s, 約 26 秒, 需電量充足)</option>
           </select>
         </div>
         <button id="btnScan360" class="btn-takeoff" style="width:100%; margin-top:8px; font-weight:700; background:var(--teal); border-color:var(--teal);" disabled>🌀 原地自轉 360° 描繪障礙物 (獨立動作)</button>
@@ -882,7 +882,7 @@ if (!window.THREE) {
 /* ============================================================
    1. 通訊協定與封包核心 (PROTOCOL Core)
    ============================================================ */
-const APP_VERSION = "v1.8.5-b20261112.0930";
+const APP_VERSION = "v1.8.6-b20261112.1000";
 
 function crc16(bytes, crc = 0) {
   for (const b of bytes) {
@@ -964,8 +964,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const hex = a => Array.from(a, x => x.toString(16).padStart(2, '0').toUpperCase()).join(' ');
 const sgn = v => v > 127 ? v - 256 : v;
 
-const T_STATE = 0x40, T_RANGE = 0x45, T_MOTION = 0x44, T_RAW = 0x30, T_POS = 0x42, T_JOY = 0x71, T_ALTITUDE = 0x43, T_FLOW = 0x46, T_CARD_COLOR = 0x93;
-const NAMES = { [T_STATE]: 'State', [T_RANGE]: 'Range', [T_MOTION]: 'Motion', [T_RAW]: 'RawMotion', [T_POS]: 'Position', [T_JOY]: 'Joystick', [T_ALTITUDE]: 'Altitude', [T_FLOW]: 'Flow', [T_CARD_COLOR]: 'Color' };
+const T_ERROR = 0x03, T_STATE = 0x40, T_RANGE = 0x45, T_MOTION = 0x44, T_RAW = 0x30, T_POS = 0x42, T_JOY = 0x71, T_ALTITUDE = 0x43, T_FLOW = 0x46, T_CARD_COLOR = 0x93;
+const NAMES = { [T_ERROR]: 'Error', [T_STATE]: 'State', [T_RANGE]: 'Range', [T_MOTION]: 'Motion', [T_RAW]: 'RawMotion', [T_POS]: 'Position', [T_JOY]: 'Joystick', [T_ALTITUDE]: 'Altitude', [T_FLOW]: 'Flow', [T_CARD_COLOR]: 'Color' };
 const FLIGHT = { 0x10: '待命 (Ready)', 0x11: '啟動中 (Start)', 0x12: '起飛中 (TakeOff)', 0x13: '飛行中 (Flight)', 0x14: '降落中 (Landing)', 0x15: '翻滾', 0x16: '反向', 0x20: '已停止 (Stop)', 0x30: '意外撞擊', 0x31: '錯誤' };
 
 let port, reader, writer, readDone, wq = Promise.resolve();
@@ -1374,6 +1374,33 @@ function onFrame(f) {
   } else if (f.type === T_RAW && f.data.length === 12) {
     const g = i16(f.data);
     $('raw').textContent = `RawMotion (0x30 原始值) Accel(${g(0)}, ${g(1)}, ${g(2)}) Gyro(${g(3)}, ${g(4)}, ${g(5)})`;
+
+  } else if (f.type === T_ERROR && f.data.length >= 16) {
+    const v = new DataView(Uint8Array.from(f.data).buffer);
+    const errSensor = v.getUint32(8, true);
+    const errState = v.getUint32(12, true);
+    const errList = [];
+    if (errState & 0x00000008) {
+      errList.push('低電量 (LowBattery)');
+      if ($('bat')) {
+        $('bat').textContent = (st.battery || 0) + ' % (⚠️低電量)';
+        $('bat').style.color = 'var(--red)';
+      }
+    }
+    if (errState & 0x00000010) errList.push('起飛失敗 (CheckPropeller/Motor)');
+    if (errState & 0x00000020) errList.push('螺旋槳劇烈震動');
+    if (errState & 0x00000040) errList.push('姿態不穩傾角過大');
+    if (errState & 0x00000080) errList.push('馬達異常');
+    if (errSensor & 0x00000001) errList.push('動態感測器未響應');
+    if (errSensor & 0x00000004) errList.push('陀螺儀未校準');
+
+    const desc = errList.length > 0 ? errList.join('、') : `Sensor:0x${errSensor.toString(16)} State:0x${errState.toString(16)}`;
+    note = `⚠️ 狀態警告: ${desc}`;
+    if (errState & 0x00000008) {
+      log('err', `⚠️ 【低電量警報】無人機主控回報電池電量嚴重不足 (LowBattery)，馬達轉速受限且隨時觸發保護，請儘速降落並更換充滿電的電池！`);
+    } else {
+      log('warn', `⚠️ 【無人機主控狀態】${desc}`);
+    }
   }
 
   if (!(polled && $('hidePoll').checked)) {
@@ -1400,14 +1427,15 @@ let isScanning360 = false;
 async function pollLoop() {
   let i = 0;
   while (connected) {
-    if (!isScriptRunning) {
+    if (!isScriptRunning && !isScanning360) {
       const imu = $('imuOn').checked;
-      const seq = isScanning360
-        ? [T_RANGE, T_MOTION, T_RANGE, T_STATE]
-        : (imu ? [T_MOTION, T_RANGE, T_ALTITUDE, T_FLOW, T_CARD_COLOR, T_MOTION, T_RANGE, T_STATE] : [T_STATE, T_RANGE]);
+      const seq = imu ? [T_MOTION, T_RANGE, T_ALTITUDE, T_FLOW, T_CARD_COLOR, T_MOTION, T_RANGE, T_STATE] : [T_STATE, T_RANGE];
       poll(seq[i++ % seq.length]);
+    } else if (isScanning360) {
+      // 掃描期間由 doScan360 主迴圈掌控 Range 與 Motion，此處僅慢速輪詢 State 監控電池與模式
+      if (i++ % 6 === 0) poll(T_STATE);
     }
-    await sleep(isScanning360 ? 25 : ($('imuOn').checked ? 40 : 250));
+    await sleep(isScanning360 ? 60 : ($('imuOn').checked ? 40 : 250));
   }
 }
 
@@ -1822,20 +1850,20 @@ async function doLand() {
     await sleep(25);
   }
 
-  // 2. 連續高頻發送降落指令 (每 100ms 一次，比照官方 Python SDK)，直到確認無人機進入 0x14 (Landing) 或 0x10 (Ready)
+  // 2. 連續高頻發送降落指令 (比照官方 Python SDK: self.sendLanding() 重試)，直到確認進入 0x14 (Landing) 或 0x10 (Ready)
   const t0 = performance.now();
   let enteredLanding = false;
 
-  while (!abort && performance.now() - t0 < 6000) {
+  while (!abort && performance.now() - t0 < 5000) {
     send(P.ctl(0, 0, 0, 0));
-    send(P.land());
+    send(P.land()); // 0x11, [0x07, 0x12] -> FlightEvent.Landing
     poll(T_STATE);
 
-    if (st.flight === 0x14 || st.flight === 0x10) {
+    if (st.flight === 0x14 || st.flight === 0x10 || st.flight === 0x20) {
       enteredLanding = true;
       break;
     }
-    await sleep(100);
+    await sleep(80);
   }
 
   if (abort) return false;
@@ -1843,16 +1871,15 @@ async function doLand() {
   if (enteredLanding) {
     log('info', `✅ 已確認無人機進入降落狀態「${FLIGHT[st.flight] || st.flight}」，平穩接地中...`);
   } else {
-    log('warn', `未偵測到降落狀態回饋 (目前: ${FLIGHT[st.flight] || st.flight})，啟動雙重強制降落防護...`);
-    for (let i = 0; i < 6; i++) {
+    log('warn', `未收到降落狀態回饋 (目前: ${FLIGHT[st.flight] || st.flight})，持續補發降落指令...`);
+    for (let i = 0; i < 5; i++) {
       send(P.land());
-      send(P.cmd(0x07, 0x12)); // FlightEvent.Landing
-      send(P.ctl(0, 0, 0, -40)); // 負向油門輔助下沉
+      poll(T_STATE);
       await sleep(100);
     }
   }
 
-  // 3. 等待無人機降落觸地並停轉螺旋槳 (官方標準等待 3.5 秒)
+  // 3. 等待無人機降落觸地並停轉螺旋槳 (官方標準等待 3.5 ~ 4 秒)
   const tWait = performance.now();
   while (performance.now() - tWait < 4000) {
     if (abort) return false;
@@ -1860,7 +1887,7 @@ async function doLand() {
     if (st.flight === 0x10 || st.flight === 0x20) {
       break;
     }
-    await sleep(150);
+    await sleep(120);
   }
 
   // 4. 接地後強制切斷馬達動力與停止飛行控制器
@@ -2023,7 +2050,7 @@ async function doSimScan360(speed = 10) {
 }
 
 // 🛰️ 實機模式：極致慢速 360° 高密度自轉測距掃描（獨立動作，不含起降）
-async function doScan360(yawSpeed = 10) {
+async function doScan360(yawSpeed = 18) {
   if (typeof getExecMode === 'function' && getExecMode() === 'sim') {
     return await doSimScan360(yawSpeed);
   }
@@ -2041,26 +2068,29 @@ async function doScan360(yawSpeed = 10) {
 
     // 啟動 360° 高頻測距掃描模式
     isScanning360 = true;
-    log('warn', `開始以平穩速度 Yaw=${yawSpeed} 原地自轉，以 25-35ms 高頻密集採樣機頭 ToF 測距...`);
+    log('warn', `開始以平穩速度 Yaw=${yawSpeed} 原地自轉，以 35ms 高頻同步採樣機頭 ToF 與 IMU...`);
     let lastYaw = st.yaw || 0;
     let totalTurn = 0;
     const targetTurn = 360;
     const t0 = performance.now();
     // 依 yawSpeed 設定安全超時保護 (超慢速需給予充裕時間，但保留安全熔斷)
-    const maxScanMs = yawSpeed <= 10 ? 60000 : (yawSpeed <= 16 ? 42000 : 25000);
+    const maxScanMs = yawSpeed <= 14 ? 50000 : (yawSpeed <= 20 ? 35000 : 25000);
 
     while (!abort && Math.abs(totalTurn) < targetTurn && (performance.now() - t0 < maxScanMs)) {
       // 傳送自轉動力
       await send(P.ctl(0, 0, yawSpeed, 0));
-      // 主動連續請求 Range 封包，達成極密採樣
+      // 主動連續請求 Range 與 Motion 封包，確保 Yaw 與距離同步更新，絕不丟失角度
       await send(P.req(T_RANGE));
+      await send(P.req(T_MOTION));
       await sleep(35);
 
       const curYaw = st.yaw || 0;
       let diff = curYaw - lastYaw;
-      if (diff < -180) diff += 360;
-      else if (diff > 180) diff -= 360;
-      totalTurn += diff;
+      while (diff < -180) diff += 360;
+      while (diff > 180) diff -= 360;
+      if (Math.abs(diff) < 45) {
+        totalTurn += diff;
+      }
       lastYaw = curYaw;
 
       const pct = Math.min(100, Math.round((Math.abs(totalTurn) / targetTurn) * 100));
@@ -2101,11 +2131,11 @@ $('btnScan360').onclick = async () => {
     return;
   }
 
-  const mode = $('scanSpeedMode') ? $('scanSpeedMode').value : 'ultra_slow';
-  let yawSpeed = 10;
-  let desc = '🐢 極致慢速高密 (~10°/s，約 32 秒)';
-  if (mode === 'slow') { yawSpeed = 15; desc = '🕊️ 溫和標準慢速 (~18°/s，約 20 秒)'; }
-  else if (mode === 'medium') { yawSpeed = 22; desc = '⚡ 中速巡航 (~30°/s，約 12 秒)'; }
+  const mode = $('scanSpeedMode') ? $('scanSpeedMode').value : 'slow';
+  let yawSpeed = 18;
+  let desc = '🕊️ 溫和標準慢速 (~18°/s，約 20 秒)';
+  if (mode === 'ultra_slow') { yawSpeed = 14; desc = '🐢 超慢速高密 (~14°/s，約 26 秒)'; }
+  else if (mode === 'medium') { yawSpeed = 26; desc = '⚡ 中速巡航 (~26°/s，約 14 秒)'; }
 
   if (isSim) {
     // 🎮 純數位雙生模擬：直接流暢執行獨立自轉測繪
@@ -2149,12 +2179,14 @@ async function emergencyStop() {
   stopAllMotorsImmediate(false);
   if (isScriptRunning) stopRunningScript();
 
-  // 清空佇列並連發強制煞停 (CommandType.Stop 0x01 + FlightEvent.Stop 0x07,0x10 + Motor 0 + Throttle -100)
-  for (let i = 0; i < 5; i++) {
-    send(P.motorAll(0, 0, 0, 0));   // 0x60: 四馬達 PWM 歸零
-    send(P.cmd(0x01, 0x00));        // 0x11: CommandType.Stop
-    send(P.cmd(0x07, 0x10));        // 0x11: FlightEvent.Stop (飛行狀態強制熔斷)
-    send(P.ctl(0, 0, 0, -100));     // 0x10: 負推力切斷升力
+  // 清空佇列並連發強制煞停 (控制量歸零 + ModeControlFlight None + CommandType.Stop + FlightEvent.Stop + MotorAll 0)
+  // 注意：絕對不能發送負向油門 -100，否則韌體會當作手動飛行搖桿指令持續啟動 PID 運轉
+  for (let i = 0; i < 4; i++) {
+    send(P.ctl(0, 0, 0, 0));        // 控制量全數歸零
+    send(P.cmd(0x02, 0x00));        // ModeControlFlight.None_ (解除飛行控制 PID)
+    send(P.cmd(0x01, 0x00));        // CommandType.Stop
+    send(P.cmd(0x07, 0x10));        // FlightEvent.Stop (強制切換飛行模式為 Stop 0x20)
+    send(P.motorAll(0, 0, 0, 0));   // 0x60: 四馬達 PWM 強制歸零
     await sleep(25);
   }
   log('err', '🛑 [緊急煞停已送出] 馬達 PWM 歸零、FlightEvent.Stop 與 CommandType.Stop 已連續強制灌入！');
@@ -2418,7 +2450,7 @@ function simRaycastDistance(x0, z0, yawDeg) {
 const PRESETS = {
   sensor_suite: `# CoDrone EDU 七大感測器全量即時讀取檢測腳本\n# 支援實機連線或純數位雙生模擬機執行\nprint("=== 📡 CoDrone EDU 七大感測器即時遙測檢測 ===")\n\n# 1. 加速度計 (m/s²)\nax = drone.get_x_accel()\nay = drone.get_y_accel()\naz = drone.get_z_accel()\nprint(f"1. 加速度計 (m/s²): X={ax}, Y={ay}, Z={az}")\n\n# 2. 陀螺儀角速度 (°/s)\ngx = drone.get_x_gyro()\ngy = drone.get_y_gyro()\ngz = drone.get_z_gyro()\nprint(f"2. 陀螺儀角速度 (°/s): Roll={gx}, Pitch={gy}, Yaw={gz}")\n\n# 3. 氣壓計與溫度\npress = drone.get_pressure()\ntemp = drone.get_temperature()\nprint(f"3. 氣壓計: {press} hPa, 機體內部溫度: {temp} °C")\n\n# 4. 光流感測器\nfx = drone.get_flow_x()\nfy = drone.get_flow_y()\nprint(f"4. 光流累計位移 (m): X={fx}, Y={fy}")\n\n# 5. 前方避障與 6. 底部測距\nfront = drone.get_front_range()\nbottom = drone.get_bottom_range()\nprint(f"5. 前方避障 ToF 距離: {front} cm")\nprint(f"6. 底部高度 ToF 測距: {bottom} cm")\n\n# 7. 雙通道色彩感測器\ncolors = drone.get_colors()\nprint(f"7. 底部色彩感測: 前感測器={colors[0]}, 後感測器={colors[1]}")\nprint("=== ✅ 七大感測器即時遙測檢測完畢！ ===")`,
   test_flight: `# 雙模支援：可在「實機 + 數位雙生」或「純數位雙生模擬機」執行\n# 動作：起飛 ➔ 懸停 2 秒 ➔ 降落\nprint("開始執行飛行測試...")\ndrone.takeoff()\ndrone.hover(2)\ndrone.land()\nprint("飛行測試圓滿完成！")`,
-  scan_360: `# 360° 原地自轉獨立高密測距掃描腳本 (實機與模擬機皆支援)\n# 注意：scan_360 為純自轉獨立動作（不含起降），開始嗶 2 聲，結束嗶 5 聲提醒！\n# 操作者可自由選擇是否在空中執行，或在桌面/轉盤上靜態測繪：\nprint("開始 360 度環景環境高密測繪程序...")\nprint("目前電池電量:", drone.get_battery(), "%")\n\n# 範例 1：若要空中測繪，手動加入起飛與懸停（若已在空中或地面手持測繪可省略起降）：\ndrone.takeoff()\ndrone.hover(1.5)\n\nprint("開始原地自轉高密度掃描（即將鳴響 2 聲）...")\ndrone.scan_360(10) # 速度 10 (極致慢速高密採樣，結束鳴響 5 聲)\n\nprint("自轉測繪完畢，準備降落...")\ndrone.hover(1.5)\ndrone.land()\nprint("任務圓滿完成！請檢視雷達圖與 3D 空間點雲。")`,
+  scan_360: `# 360° 原地自轉獨立高密測距掃描腳本 (實機與模擬機皆支援)\n# 注意：scan_360 為純自轉獨立動作（不含起降），開始嗶 2 聲，結束嗶 5 聲提醒！\n# 操作者可自由選擇是否在空中執行，或在桌面/轉盤上靜態測繪：\nprint("開始 360 度環景環境高密測繪程序...")\nprint("目前電池電量:", drone.get_battery(), "%")\n\n# 範例 1：若要空中測繪，手動加入起飛與懸停（若已在空中或地面手持測繪可省略起降）：\ndrone.takeoff()\ndrone.hover(1.5)\n\nprint("開始原地自轉高密度掃描（即將鳴響 2 聲）...")\ndrone.scan_360(18) # 速度 18 (溫和標準慢速高密採樣，結束鳴響 5 聲)\n\nprint("自轉測繪完畢，準備降落...")\ndrone.hover(1.5)\ndrone.land()\nprint("任務圓滿完成！請檢視雷達圖與 3D 空間點雲。")`,
   motor_test: `# CoDrone EDU 馬達轉速動力與單體測試\n# 注意：微型有刷空心杯馬達無編碼器，無法讀取實際 RPM，但可控制各馬達輸出動力 (PWM: 0~1000)\n\nprint("⚡ 測試 M1 前右馬達 (PWM: 350)...")\ndrone.send_motor_single(0, 350)\nsleep(1) # 運轉 1 秒\ndrone.send_motor_single(0, 0) # 停轉\nsleep(0.5)\n\nprint("⚡ 測試 M4 前左馬達 (PWM: 350)...")\ndrone.send_motor_single(3, 350)\nsleep(1)\ndrone.send_motor_single(3, 0)\nsleep(0.5)\n\nprint("⚡ 四馬達同時低速自檢 (PWM: 300)...")\ndrone.set_motor_speed(300, 300, 300, 300)\nsleep(1)\n\nprint("🛑 測試完成，停止所有馬達。")\ndrone.stop_motors()`,
   battery_check: `# 查詢感測器與電池資料 (實機與模擬機皆支援)\nbat = drone.get_battery()\nh = drone.get_height()\nfront = drone.get_front_distance()\natt = drone.get_attitude()\nprint("無人機電池電量:", bat, "%")\nprint("底部測距高度:", h, "cm")\nprint("前方測距障礙:", front, "cm")\nprint("姿態資訊: Roll=" + str(att['roll']) + ", Pitch=" + str(att['pitch']) + ", Yaw=" + str(att['yaw']))`,
   step_move: `# 前進與平移位移測試 (可於 3D 雙生空間觀察航跡路線)\ndrone.takeoff()\ndrone.hover(1.5)\n\nprint("前方飛行中 (Pitch=20)...")\ndrone.set_pitch(20)\ndrone.move(1)\n\nprint("右方平移中 (Roll=20)...")\ndrone.set_pitch(0)\ndrone.set_roll(20)\ndrone.move(1)\n\ndrone.set_roll(0)\ndrone.hover(1)\ndrone.land()\nprint("飛行任務結束，已繪製航跡於數位雙生中！")`
